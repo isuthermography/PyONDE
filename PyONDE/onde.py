@@ -95,7 +95,7 @@ class ONDEGraph(object):
         self.lock = threading.Lock()
 
         if snapshot is None:
-            snapshot = 
+            snapshot = ONDEGraphSnapshot.new()
 
             pass
         self.latest_snap = snapshot
@@ -118,7 +118,7 @@ class ONDEOpScope(object):
 
 
 
-class ONDEPath(List):
+class ONDEPath(list):
     """A path, essentially a list of strings, starting
     with an entry_point name and followed by attribute names
     for ONDEObjects, that leads to an ONDEBase."""
@@ -138,13 +138,21 @@ class ONDEBase(object):
             _referencedby = kwargs["_referencedby"]
             del kwargs["_referencedby"]
             pass
+        _frozen = False
+        if "_frozen" in kwargs:
+            _frozen = kwargs["_frozen"]
+            del kwargs["_frozen"]
+            pass
         if len(kwargs) > 0:
-            raise AttributeError(f"Unknown constructor parameters to ONDEBase: {str(list(kwargs.keys())):s}")
+            raise AttributeError(f"Unknown constructor parameters to {self.__class__.__name__:s}: {str(list(kwargs.keys())):s}")
         if _referencedby is None:
             _referencedby = frozenset()
             pass
         object.__setattr__(self, "_referencedby", _referencedby)
         object.__setattr__(self, "_frozen", False)
+        if _frozen:
+            self._freeze() # Derived class may have additional operations
+            pass
         pass
 
     def __copy__(self):
@@ -178,6 +186,41 @@ class ONDEValue(ONDEBase):
     cannot reference other objects, but can be referenced
     by other objects."""
     value = None # Immutable value
+
+    def __init__(self, _orig = None, **kwargs):
+        if _orig is not None:
+            self.value = _orig.value
+            pass
+        if "value" in kwargs:
+            value = copy.copy(kwargs["value"])
+            if isinstance(value, numbers.Integral):
+                value = int(value)
+                pass
+            elif isinstance(value, numbers.Real):
+                value = float(value)
+                pass
+            elif isinstance(value, numbers.Complex):
+                value = complex(value)
+                pass
+            elif isinstance(value, str):
+                pass
+            elif isinstance(value, collections.Sequence):
+                value = tuple(value)
+                pass
+            elif isinstance(value, np.ndarray):
+                value.flags.writeable = False
+                pass
+            else:
+                raise ValueError(f"ONDEValue: Cannot understand value type {value.__class__.__name__:s}")
+            del kwargs["value"]
+            pass
+        super().__init__(_orig, **kwargs)
+        pass
+
+    @classmethod
+    def new(cls, value = None):
+        return cls(None, value = value)
+    
     pass
 
 class ONDEH5Dataset(ONDEBase):
@@ -193,11 +236,6 @@ class ONDEObject(ONDEBase):
         """Private constructor for internal use only.
         Use .new() classmethod or copy.copy()
         """
-        _referencedby = None
-        if "_referencedby" in kwargs:
-            _referencedby = kwargs["_referencedby"]
-            del kwargs["_referencedby"]
-            pass
         
         _ONDE_type = None
         if _orig is not None:
@@ -221,11 +259,10 @@ class ONDEObject(ONDEBase):
             #    pass
             del kwargs["_ONDE_attrs"]
             pass
-        if len(kwargs) > 0:
-            raise AttributeError(f"Unknown constructor parameters to ONDEObject: {str(list(kwargs.keys())):s}")
-        super().__init__(_orig, referencedby)
-        object.__setattr__(self, "_ONDE_type", List(ONDE_type))
-        ONDE_attrs = TwoWayDictionary(ONDE_attrs)
+        
+        super().__init__(_orig, **kwargs)
+        object.__setattr__(self, "_ONDE_type", list(_ONDE_type))
+        ONDE_attrs = TwoWayDictionary(_ONDE_attrs)
         object.__setattr__(self, "_ONDE_attrs", ONDE_attrs)
         pass
 
@@ -238,7 +275,11 @@ class ONDEObject(ONDEBase):
         return getattr(_ONDE_attrs, name)
 
     def __setattr__(self, name, value):
-        # !!!***
+        _frozen = object.__getattribute__(self, "_frozen")
+        if _frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        setattr(_ONDE_attrs, name, value)
         pass
     
     def _freeze(self):
@@ -279,12 +320,15 @@ class ONDEGraphSnapshot(ONDEObject):
         super().__init__(self, _orig, **kwargs)
         pass
 
+    #@classmethod
+    #def new(cls, entry_points = None):
+    #    if entry_points is None:
+    #        entry_points = TwoWayDictionary()
+    #        pass
+    #    return cls(None, _ONDE_type = [], _ONDE_attrs = entry_points)
     @classmethod
-    def new(cls, entry_points = None):
-        if entry_points is None:
-            entry_points = TwoWayDictionary()
-            pass
-        return cls(None, _ONDE_type = [], _ONDE_attrs = entry_points)
+    def new(cls, **kwargs):
+        return cls(None, _ONDE_type = [],**kwargs)
     pass
 
 class ONDEProxy(object):
@@ -293,7 +337,7 @@ class ONDEProxy(object):
     _path = None # ONDEPath of the object we are proxying
     _obj = None # The actual object we are proxying
     _obj_snap = None # Snapshot from which we obtained _obj
-    pass 
+    pass
 
 
 
