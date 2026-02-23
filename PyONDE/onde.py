@@ -3,6 +3,10 @@ import sys
 import os
 import os.path
 import threading
+import copy
+import numbers
+import collections
+import numpy as np
 
 class TwoWayDictionary(object):
     """A dictionary that is indexable by strings using
@@ -73,7 +77,7 @@ class TwoWayDictionary(object):
             nameset = frozenset({name})
             # Check if this object already has an existing set of references
             if id(obj) in _byobjid:
-                nameset = _byobjid[id(obj)] + nameset
+                nameset = _byobjid[id(obj)] | nameset
                 pass
             _byobjid[id(obj)] = nameset
             pass
@@ -218,8 +222,8 @@ class ONDEValue(ONDEBase):
         pass
 
     @classmethod
-    def new(cls, value = None):
-        return cls(None, value = value)
+    def new(cls, value = None, **kwargs):
+        return cls(None, value = value, **kwargs)
     
     pass
 
@@ -261,7 +265,7 @@ class ONDEObject(ONDEBase):
             pass
         
         super().__init__(_orig, **kwargs)
-        object.__setattr__(self, "_ONDE_type", list(_ONDE_type))
+        object.__setattr__(self, "_ONDE_type", list(_ONDE_type)) ######################## 'NoneType' object is not iterable
         ONDE_attrs = TwoWayDictionary(_ONDE_attrs)
         object.__setattr__(self, "_ONDE_attrs", ONDE_attrs)
         pass
