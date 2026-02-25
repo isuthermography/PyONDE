@@ -57,7 +57,7 @@ class TwoWayDictionary(object):
     
     def __setattr__(self, name, obj):
         if name.startswith("_"):
-            raise ValueError("Attributes with leading underscores not allowed")
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
         _bystrings = object.__getattribute__(self, "_bystrings")
         _byobjid = object.__getattribute__(self, "_byobjid")
         _lock = object.__getattribute__(self, "_lock")
@@ -150,7 +150,7 @@ class ONDEBase(object):
         if len(kwargs) > 0:
             raise AttributeError(f"Unknown constructor parameters to {self.__class__.__name__:s}: {str(list(kwargs.keys())):s}")
         if _referencedby is None:
-            _referencedby = frozenset()
+            _referencedby = set()
             pass
         object.__setattr__(self, "_referencedby", _referencedby)
         object.__setattr__(self, "_frozen", False)
@@ -174,7 +174,7 @@ class ONDEBase(object):
         pass
 
     def _add_referencedby(self, obj_that_references_us):
-        _referencedby = object.__getattr__(self, "_referencedby")
+        _referencedby = object.__getattribute__(self, "_referencedby")
         _referencedby.add(obj_that_references_us)
         pass
 
@@ -245,7 +245,7 @@ class ONDEObject(ONDEBase):
         if _orig is not None:
             _ONDE_type = object.__getattribute__(_orig, "_ONDE_type")
             pass
-        if _ONDE_type in kwargs:
+        if "_ONDE_type" in kwargs:
             _ONDE_type = kwargs["_ONDE_type"]
             del kwargs["_ONDE_type"]
             pass
@@ -254,7 +254,7 @@ class ONDEObject(ONDEBase):
         if _orig is not None:
             _ONDE_attrs = object.__getattribute__(_orig, "_ONDE_attrs")
             pass
-        if _ONDE_attrs in kwargs:
+        if "_ONDE_attrs" in kwargs:
             #if _ONDE_attrs is not None:
             #    _ONDE_attrs.update(kwargs["_ONDE_attrs"])
             #    pass
@@ -264,15 +264,16 @@ class ONDEObject(ONDEBase):
             del kwargs["_ONDE_attrs"]
             pass
         
-        super().__init__(_orig, **kwargs)
-        object.__setattr__(self, "_ONDE_type", list(_ONDE_type)) ######################## 'NoneType' object is not iterable
+        
+        object.__setattr__(self, "_ONDE_type", list(_ONDE_type))
         ONDE_attrs = TwoWayDictionary(_ONDE_attrs)
         object.__setattr__(self, "_ONDE_attrs", ONDE_attrs)
+        super().__init__(_orig, **kwargs)
         pass
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name == "_freeze" or name == "_frozen" or name == "_add_referencedby":
+            if name == "_freeze" or name == "_frozen" or name == "_add_referencedby" or name == "__class__":
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
@@ -313,7 +314,7 @@ class ONDEObject(ONDEBase):
         for attrname in kwargs:
             setattr(newobj, attrname, kwargs[attrname])
             pass
-        return cls
+        return newobj
     pass
 
 class ONDEGraphSnapshot(ONDEObject):
@@ -321,7 +322,7 @@ class ONDEGraphSnapshot(ONDEObject):
     The _ONDE_type field should be empty.
     Attributes represent entry points of the graph."""
     def __init__(self, _orig = None, **kwargs):
-        super().__init__(self, _orig, **kwargs)
+        super().__init__(_orig, **kwargs)
         pass
 
     #@classmethod
@@ -332,7 +333,19 @@ class ONDEGraphSnapshot(ONDEObject):
     #    return cls(None, _ONDE_type = [], _ONDE_attrs = entry_points)
     @classmethod
     def new(cls, **kwargs):
-        return cls(None, _ONDE_type = [],**kwargs)
+        _frozen = False
+        if "_frozen" in kwargs:
+            _frozen = kwargs["_frozen"]
+            del kwargs["_frozen"]
+            pass
+        newobj = cls(None, _ONDE_type = [])
+        for attrname in kwargs:
+            setattr(newobj, attrname, kwargs[attrname])
+            pass
+        if _frozen:
+            newobj._freeze()
+            pass
+        return newobj
     pass
 
 class ONDEProxy(object):
