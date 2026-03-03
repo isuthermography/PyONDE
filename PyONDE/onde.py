@@ -6,6 +6,7 @@ import threading
 import copy
 import numbers
 import collections
+import collections.abc
 import numpy as np
 
 class TwoWayDictionary(object):
@@ -30,7 +31,22 @@ class TwoWayDictionary(object):
             pass
         
         object.__setattr__(self, "_bystrings", dict(bystrings))
-        object.__setattr__(self, "_byobjid",{id(bystrings[s]): s for s in bystrings})
+        byobjid = dict()
+        for s in bystrings:
+            obj = bystrings[s]
+            
+            if obj is not None:
+                if id(obj) in self._byobjid:
+                    idx_set = self._byobjid[id(obj)]
+                    pass
+                else:
+                    idx_set = frozenset()
+                    pass
+                
+                byobjid[id(obj)] = idx_set | { s }
+                pass
+            pass
+        object.__setattr__(self, "_byobjid",byobjid)
         object.__setattr__(self, "_lock", threading.Lock())
         object.__setattr__(self, "_frozen", False)
         pass
@@ -49,7 +65,7 @@ class TwoWayDictionary(object):
         return _bystrings[name]
 
 
-    def __getitem__(self, obj):
+    def __call__(self, obj):
         _byobjid = object.__getattribute__(self, "_byobjid")
         objidx = _byobjid[id(obj)]
         return objidx # Returns frozenset
@@ -88,11 +104,103 @@ class TwoWayDictionary(object):
         pass
     pass
 
+class TwoWayArray(object):
+    """An Array that is indexable by integers using
+    bracket notation. Can be
+    reverse indexed by those objects using parenthesis notation
+    to get index tuples, which will be wrapped in another layer
+    of tuple because
+    multiple index values can point to the same object."""
+    _byindex = None # numpy array, contains objects
+    _byobjid = None # id(object) dictionary, contains frozensets of strings
+    _lock = None # threading.Lock object protecting _byindex and _byobjid from changes. This lock is last in the locking order, ie you may not acquire any other lock while holding this lock.
+    _frozen = None # Boolean. Dictionary cannot be modified once frozen
+    
+    def __init__(self, byindex=None,shape = None):
+        """Pass an existing array or None as byindex"""
+        if shape is None:
+            shape = ()
+            pass
+        
+        if byindex is None:
+            byindex = np.zeros(shape,dtype="O")
+            pass
+
+        if isinstance(byindex, TwoWayArray):
+            byindex = byindex.byindex
+            pass
+
+        self._byindex = copy.copy(byindex)
+        self._byobjid = {}
+        nditer = np.nditer(self._byindex, flags = ("multi_index","refs_ok"))
+        for objarray in nditer:
+            obj = objarray[()]
+            if obj is not None:
+                if id(obj) in self._byobjid:
+                    idx_set = self._byobjid[id(obj)]
+                    pass
+                else:
+                    idx_set = frozenset()
+                    pass
+                
+                self._byobjid[id(obj)] = idx_set | { tuple(nditer.multi_index) }
+                pass
+            pass
+
+        self._lock = threading.Lock()
+        self._frozen = False
+                
+        pass
+
+    def __iter__(self):
+        return np.nditer(self._byindex,flags=("multi_index","refs_ok")) # Just use iterator of underlying array
+
+    def __getitem__(self, index):
+        
+        return self._byindex[index]
+
+
+    def __call__(self, obj):
+        objidx = self._byobjid[id(obj)]
+        return objidx # Returns frozenset
+    
+    
+    def __setitem__(self, index, obj):
+        if not isinstance(index,tuple):
+            index = (index,)
+            pass
+
+        if self._frozen:
+            raise AttributeError("Not allowed to modify a frozen TwoWayArray")
+        with self._lock:
+            oldobj = self._byindex[index]
+            if  oldobj is not None:
+                # Remove old back-reference
+                self._byobjid[id(oldobj)] = self._byobjid[id(oldobj)] - frozenset({tuple(obj)})
+                pass
+            
+            self._byindex[index] = obj
+
+            indexset = frozenset({index})
+            # Check if this object already has an existing set of references
+            if id(obj) in self._byobjid:
+                indexset = self._byobjid[id(obj)] | indexset
+                pass
+            self._byobjid[id(obj)] = indexset
+            pass
+        pass
+
+    def _freeze(self):
+        self._byindex.writable = False
+        self._frozen = True
+        pass
+    pass
+
 
 class ONDEGraph(object):
     """Represents the graph of interconnected ONDE objects
     and attributes. May relate to any number of actual files."""
-    lock = None # threading.Lock that protects access to modify graph structure information.
+    lock = None # threading.Lock that protects access to replace the snapshot.
     latest_snap = None # class ONDEGraphSnapshot
 
     def __init__(self, snapshot = None):
@@ -186,7 +294,7 @@ class ONDEBase(object):
 
 class ONDEValue(ONDEBase):
     """ONDEValue represents a string, integer, float,
-    small array, or other simple value. An ONDEValue
+    or other simple value. An ONDEValue
     cannot reference other objects, but can be referenced
     by other objects."""
     value = None # Immutable value
@@ -208,12 +316,6 @@ class ONDEValue(ONDEBase):
                 pass
             elif isinstance(value, str):
                 pass
-            elif isinstance(value, collections.Sequence):
-                value = tuple(value)
-                pass
-            elif isinstance(value, np.ndarray):
-                value.flags.writeable = False
-                pass
             else:
                 raise ValueError(f"ONDEValue: Cannot understand value type {value.__class__.__name__:s}")
             del kwargs["value"]
@@ -227,8 +329,150 @@ class ONDEValue(ONDEBase):
     
     pass
 
-class ONDEH5Dataset(ONDEBase):
-    """Represents an HDF5 dataset"""
+class ONDEArray(ONDEBase):
+    """ONDEArray represents an array. An ONDEArray
+    cannot reference other objects, but can be referenced
+    by other objects. For an array of references, see
+    ONDEReferenceArray.
+
+    An ONDEArray can be stored either as an HDF5
+    attribute or an HDF5 dataset depending on the
+    value of the store_as_dataset boolean.
+
+    """
+    value = None # numpy array
+    store_as_dataset = None # boolean; store as an HDF5 dataset if True, otherwise and an HDF5 attribute
+    
+    def __init__(self, _orig = None, **kwargs):
+        store_as_dataset = False
+        
+        if _orig is not None:
+            value = _orig.value
+            store_as_dataset = _orig.store_as_dataset
+            pass
+
+        
+        if "store_as_dataset" in kwargs:
+            store_as_dataset = bool(kwargs["store_as_dataset"])
+            del kwargs["store_as_dataset"]
+            pass
+        
+        if "value" in kwargs:
+            value = copy.copy(kwargs["value"])
+            if isinstance(value, collections.abc.Sequence):
+                value = np.array(value)
+                pass
+            elif isinstance(value, np.ndarray):
+                # value.flags.writeable = False
+                pass
+            else:
+                raise ValueError(f"ONDEArray: Cannot understand value type {value.__class__.__name__:s}")
+            del kwargs["value"]
+            pass
+        self.store_as_dataset = store_as_dataset
+        self.value = value
+        super().__init__(_orig, **kwargs)
+        pass
+
+    def __getitem__(self,index):
+        return self.value[index]
+
+    def __setitem__(self,index,el_value):
+        if self._frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+
+        self.el_value[index] = el_value
+        pass
+
+    def _freeze(self):
+        self.value.flags.writeable = False
+        super()._freeze()
+        pass
+
+    @classmethod
+    def new(cls, value = None, **kwargs):
+        return cls(None, value = value, **kwargs)
+    
+    pass
+
+
+class ONDEReferenceArray(ONDEBase):
+    """Represents an array of references to other ONDEObjects.
+
+    An ONDEReferenceArray can be stored either as an HDF5
+    attribute or an HDF5 dataset depending on the value
+    of the store_as_dataset boolean."""
+    refs = None # TwoWayArray of ONDEBase references
+    store_as_dataset = None # True to store as an HDF5 dataset, False to store as an HDF5 attribute
+    
+
+    def __init__(self,_orig, **kwargs):
+        """Private constructor for internal use only.
+        Use .new() classmethod or copy.copy()
+        """
+        store_as_dataset = False
+        refs = None
+        if _orig is not None:
+            refs = _orig.refs
+            store_as_dataset = _orig.store_as_dataset
+            pass
+
+        
+        if "store_as_dataset" in kwargs:
+            store_as_dataset = bool(kwargs["store_as_dataset"])
+            del kwargs["store_as_dataset"]
+            pass
+        
+        shape = ()
+
+        if "shape" in kwargs:
+            shape = tuple(kwargs["shape"])
+            del kwargs["shape"]
+            pass
+        
+        if "refs" in kwargs:
+            refs = TwoWayArray(byindex=kwargs["refs"])
+            del kwargs["refs"]
+            pass
+
+        if refs is None:
+            refs = TwoWayArray(shape=shape)
+            pass
+        
+        self.store_as_dataset = store_as_dataset
+        self.refs = refs
+        super().__init__(_orig,**kwargs)
+        pass
+
+    def __getitem__(self,index):
+        return self.refs[index]
+
+    def __setitem__(self,index,ref):
+        if self._frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+
+        self.refs[index] = ref
+        pass
+
+    def _freeze(self):
+        if self._frozen:
+            raise RuntimeError("Attempting to freeze an object that is already frozen")
+        self.refs._freeze()
+        
+        nditer = self.refs.iter()
+        for arrayref in nditer:
+            obj = arrayref[()]
+            obj._add_referencedby(self)
+            pass
+        super()._freeze()
+        pass
+
+    @classmethod
+    def new(cls, refs = None, shape = None, **kwargs):
+        return cls(None, refs = refs, shape = shape, **kwargs)
+    
+    pass
+
 
 class ONDEObject(ONDEBase):
     """ONDEObject represents a (non-leaf) node in the graph
@@ -273,7 +517,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name == "_freeze" or name == "_frozen" or name == "_add_referencedby" or name == "__class__":
+            if name == "_freeze" or name == "_frozen" or name == "_add_referencedby" or name == "__class__" or name == "__dir__":
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
@@ -286,6 +530,10 @@ class ONDEObject(ONDEBase):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
         setattr(_ONDE_attrs, name, value)
         pass
+
+    def __dir__(self):
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        return ["_freeze","_frozen"] + [attrname for attrname in _ONDE_attrs]
     
     def _freeze(self):
         _frozen = object.__getattribute__(self, "_frozen")
@@ -297,6 +545,7 @@ class ONDEObject(ONDEBase):
             obj = getattr(_ONDE_attrs, attrname)
             obj._add_referencedby(self)
             pass
+        
         super()._freeze()
         pass
     
@@ -318,7 +567,7 @@ class ONDEObject(ONDEBase):
     pass
 
 class ONDEGraphSnapshot(ONDEObject):
-    """ Not allowed to be referenced by any other object.
+    """ Not allowed to be referenced by any other ONDEObject.
     The _ONDE_type field should be empty.
     Attributes represent entry points of the graph."""
     def __init__(self, _orig = None, **kwargs):
