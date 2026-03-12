@@ -597,6 +597,103 @@ class ONDEGraphSnapshot(ONDEObject):
         return newobj
     pass
 
+class ONDEField(object):
+    """Represents a field from the .csv spec."""
+
+    classname = None # Prefix on the field
+    name = None # Field name, not including prefix or separating colon
+    documentation = None # Documentation string
+    mandatory = None # True for mandatory attributes/datasets
+    dataset = None # True for dataset storage, False for attribute storage
+    content_class_string = None # Referenced type
+    dimensionality_string = None # Dimensionality field from .csv
+    value_string = None # Value field from .csv
+    pass
+    
+
+class ONDEAccessoryClass(object):
+    """Represents an accessory class defined in the ONDE .csv spec."""
+
+    classname = None # Name of the accessory class
+    attributes = None # Dictionary by name of ONDEField references
+
+class ONDEClass(object):
+    """Represents a class defined in the ONDE .csv spec."""
+    classname = None
+    class_derivation = None # tuple of strings starting with base class and ending with this current class
+    superclass = None # Reference the ONDEClass object for our superclass, or None
+    type_tags = None # Dictionary by name of (truth value for mandatory, ONDEAccessoryClass object)
+
+class ONDEClassInstanceWrapper(object):
+    """Represents an ONDEObject that is an instance of a known class. References the underlying ONDEObject and the class definition."""
+
+    pass
+
+class ONDEClassDefinitions(object):
+    """Represents the set of class definitions from the ONDE .csv file."""
+    classes = None # Dictionary by name of classes
+    acc_classes = None # Dictionary by name of accessory classes
+    file_type = None # From the size_or_content of the blank ONDE:TYPE entry at the top of the csv file
+    
+    def __init__(self):
+        self.classes = collections.OrderedDict()
+        self.acc_classes = collections.OrderedDict()
+        pass
+
+    @classmethod
+    def load_from_csv(cls,filename):
+        class_defs = ONDEClassDefinitions()
+        
+        with open(filename,mode="r",encoding="utf-8",delimiter = ";") as csvfh:
+            reader = csv.reader(csvfh)
+            for row in reader:
+                if len(row) < 8:
+                    row += [""]*(8-len(row))
+                    pass
+                (classname, name, comments, mandatory_optional, dataset_attribute, content_class, dims, size_or_content) = row
+                if name == "ONDE:TYPE":
+                    # class definition
+                    if classname in class_defs.classes:
+                        raise ValueError(f"Class {classname:s} multiply defined in {filename:s}")
+                    newclass = ONDEClass()
+                    newclass.classname = classname
+                    # size_or_content should be a list of base classes terminated with this class, written roughly like a python list of strings
+                    baseclasses = ast.literal_eval(size_or_content)
+                    assert(type(baseclasses) is list)
+                    if classname == "":
+                        # Blank ONDE:TYPE entry specifying the file type
+                        assert(len(baseclasses) == 1)
+                        assert(type(baseclasses[0]) is str)
+                        class_defs.file_type = baseclasses[0]
+                        superclasses = []
+                        superclass_def = None
+                        pass
+                    else:
+                        # check superclasses
+                        superclasses = baseclasses[:-1]
+
+                        if len(superclasses) > 0:
+                            immediate_superclass = superclasses[-1]
+                            if immediate_superclass not in class_defs.classes:
+                                raise ValueError(f"Superclass {immediate_superclass:s} of {classname:s} in {filename:s} is unknown")
+                            superclass_def = class_defs.classes[immediate_superclass]
+                            # Superclass definition list of class names should match our superclasses
+                            if tuple(superclasses) != superclass_defs.class_derviation:
+                                raise ValueError(f"Superclass {immediate_superclass:s} derviation {str(superclass_defs.class_derivation):s} does not match superclass list {str(tuple(superclasses)):s} from class {classname:s} in csv file {filename:s}")
+                            pass
+                        else:
+                            superclass_def = None
+                            pass
+                        pass
+                    
+                    newclass.class_derivation = tuple(superclasses) + (classname,)
+                    newclass.superclass = superclass_def # ONDEClassObject
+                    # More code pending!
+                        
+                        
+                        
+                    
+
 class ONDEProxy(object):
     """Mutable proxy reference to a graph entry that remembers context."""
     _graph = None # ONDEGraph object we started with 
