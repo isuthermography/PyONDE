@@ -58,14 +58,14 @@ class TwoWayDictionary(object):
         return _bystrings.__iter__() # Just use iterator of underlying dictionary
 
     def __getattribute__(self, name):
-        _bystrings = object.__getattribute__(self, "_bystrings")
-
         if name.startswith("_"):
             if name == "_freeze" or name == "_frozen":
                 return object.__getattribute__(self, name)
             raise IndexError("TwoWayDictionary: Indexes are not allowed to have leading underscores")
-        return _bystrings[name]
 
+        _get_attr = object.__getattribute__(self, "_get_attr")
+
+        return _get_attr(name)
 
     def __call__(self, obj):
         _byobjid = object.__getattribute__(self, "_byobjid")
@@ -73,7 +73,13 @@ class TwoWayDictionary(object):
         return objidx # Returns frozenset
     
     
-    def __setattr__(self, name, obj):
+    def __setattr__(self, name, value):
+        _set_attr = object.__getattribute__(self, "_set_attr")
+        _set_attr(name, value)
+
+        pass
+
+    def _set_attr(self, name, value):
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
         _bystrings = object.__getattribute__(self, "_bystrings")
@@ -90,16 +96,23 @@ class TwoWayDictionary(object):
                 _byobjid[id(oldobj)] = _byobjid[id(oldobj)] - frozenset({name})
                 pass
             
-            _bystrings[name] = obj
+            _bystrings[name] = value
 
             nameset = frozenset({name})
             # Check if this object already has an existing set of references
-            if id(obj) in _byobjid:
-                nameset = _byobjid[id(obj)] | nameset
+            if id(value) in _byobjid:
+                nameset = _byobjid[id(value)] | nameset
                 pass
-            _byobjid[id(obj)] = nameset
+            _byobjid[id(value)] = nameset
             pass
         pass
+
+    def _get_attr(self, name):
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _bystrings = object.__getattribute__(self, "_bystrings")
+        return _bystrings[name]
 
     def _freeze(self):
         object.__setattr__(self, "_frozen", True)
@@ -202,24 +215,82 @@ class TwoWayArray(object):
 class ONDEGraph(object):
     """Represents the graph of interconnected ONDE objects
     and attributes. May relate to any number of actual files."""
-    lock = None # threading.Lock that protects access to replace the snapshot.
-    latest_snap = None # class ONDEGraphSnapshot
+    _lock = None # threading.Lock that protects access to replace the snapshot.
+    _latest_snap = None # class ONDEGraphSnapshot
 
     def __init__(self, snapshot = None):
-        self.lock = threading.Lock()
+        # self._lock = threading.Lock()
+        object.__setattr__(self, "_lock", threading.Lock())
 
         if snapshot is None:
             snapshot = ONDEGraphSnapshot.new()
 
             pass
-        self.latest_snap = snapshot
+
+        # self._latest_snap = snapshot
+        object.__setattr__(self, "_latest_snap", snapshot)
+
         pass
+    
+    def __getattribute__(self, name):
+        _get_attr = object.__getattribute__(self, "_get_attr")
+        return _get_attr(name)
+    
+    def __setattr__(self, name, value):
+        _set_attr = object.__getattribute__(self, "_set_attr")
+        _set_attr(name, value)
+        pass
+
+    def _get_attr(self, name):
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+        
+        _latest_snap = object.__getattribute__(self, "_latest_snap")
+        
+        # call ONDEProxy
+        
+        snap_proxy = ONDEProxy.new_from_snapshot(self, _latest_snap)
+        obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, name)
+
+        return _latest_snap._get_attr(name)
+    
+    # def _set_attr(self, name, value):
+    #     if name.startswith("_"):
+    #         raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+    #     _latest_snap = object.__getattribute__(self, "_latest_snap")
+        
+    #     return _latest_snap._get_attr(name)
+
+
     pass
 
 
 class ONDETransaction(object):
     """Represents a transaction in which the ONDEGraph is modified"""
     graph = None # ONDEGraph object
+    scope = None
+
+    def __init__(self, graph, include_scope=None, exclude_scope=None):
+        self.graph = graph
+        self.scope = ONDEOpScope(include_scope, exclude_scope)
+        
+        pass
+
+    def __enter__(self):
+        _lock = object.__getattribute__(self.graph, "_lock")
+        _lock.acquire()
+
+        snapshot = object.__getattribute__(self.graph, "_latest_snap")
+
+        return ONDEProxy.new_from_transaction(self, snapshot)
+
+    def __exit__(self, exc_type, exc, tb):
+        _lock = object.__getattribute__(self.graph, "_lock")
+        _lock.release()
+
+        pass
+
     pass
 
 
@@ -228,14 +299,20 @@ class ONDEOpScope(object):
     include_paths = None # List of ONDEPath objects
     exclude_paths = None # List of ONDEPath objects
     exclude_objects = None #  List of objects to be excluded
-    pass
 
+    pass
 
 
 class ONDEPath(list):
     """A path, essentially a list of strings, starting
     with an entry_point name and followed by attribute names
     for ONDEObjects, that leads to an ONDEBase."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        pass
+
     pass
 
 class ONDEBase(object):
@@ -268,6 +345,20 @@ class ONDEBase(object):
             self._freeze() # Derived class may have additional operations
             pass
         pass
+
+    def _get_attr(self, name):
+        """
+        Return the named conceptual attribute of an ONDE object.
+        """
+
+        raise ValueError("ONDEBase does not have attributes")
+    
+    def _set_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object.
+        """
+
+        raise ValueError("ONDEBase does not have attributes")
 
     def __copy__(self):
         new = self.__class__(self)
@@ -329,6 +420,26 @@ class ONDEValue(ONDEBase):
     def new(cls, value = None, **kwargs):
         return cls(None, value = value, **kwargs)
     
+    def _get_attr(self, name):
+        """
+        Return the named conceptual attribute of an ONDE object.
+        """
+
+        if name == "value":
+            return object.__getattribute__(self, name)
+
+        raise ValueError("ONDEValue does not have attributes other than \"value\"")
+    
+    def _set_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object.
+        """
+
+        if name == "value":
+            return object.__setattr__(self, name, value)
+
+        raise ValueError("ONDEValue does not have attributes other than \"value\"")
+    
     pass
 
 class ONDEArray(ONDEBase):
@@ -385,6 +496,26 @@ class ONDEArray(ONDEBase):
 
         self.el_value[index] = el_value
         pass
+
+    def _get_attr(self, name):
+        """
+        Return the named conceptual attribute of an ONDE object.
+        """
+
+        if name == "value" or name == "store_as_dataset":
+            return object.__getattribute__(self, name)
+
+        raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
+    
+    def _set_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object.
+        """
+
+        if name == "value" or name == "store_as_dataset":
+            return object.__setattr__(self, name, value)
+
+        raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
 
     def _freeze(self):
         self.value.flags.writeable = False
@@ -456,6 +587,26 @@ class ONDEReferenceArray(ONDEBase):
         self.refs[index] = ref
         pass
 
+    def _get_attr(self, name):
+        """
+        Return the named conceptual attribute of an ONDE object.
+        """
+
+        if name == "refs" or name == "store_as_dataset":
+            return object.__getattribute__(self, name)
+
+        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\" and \"store_as_dataset\"")
+    
+    def _set_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object.
+        """
+
+        if name == "refs" or name == "store_as_dataset":
+            return object.__setattr__(self, name, value)
+
+        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\" and \"store_as_dataset\"")
+
     def _freeze(self):
         if self._frozen:
             raise RuntimeError("Attempting to freeze an object that is already frozen")
@@ -519,19 +670,47 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name == "_freeze" or name == "_frozen" or name == "_add_referencedby" or name == "__class__" or name == "__dir__":
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
-        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
-        return getattr(_ONDE_attrs, name)
+
+        _get_attr = object.__getattribute__(self, "_get_attr")
+        
+        return _get_attr(name)
 
     def __setattr__(self, name, value):
         _frozen = object.__getattribute__(self, "_frozen")
         if _frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
-        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
-        setattr(_ONDE_attrs, name, value)
+        
+        _set_attr = object.__getattribute__(self, "_set_attr")
+        _set_attr(name, value)
+
         pass
+
+    def _get_attr(self, name):
+        """
+        Return the named conceptual attribute of an ONDE object.
+        """
+        
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+
+        return _ONDE_attrs._get_attr(name)
+    
+    def _set_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object.
+        """
+
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+
+        return _ONDE_attrs._set_attr(name, value)
 
     def __dir__(self):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
@@ -591,7 +770,7 @@ class ONDEGraphSnapshot(ONDEObject):
             pass
         newobj = cls(None, _ONDE_type = [])
         for attrname in kwargs:
-            setattr(newobj, attrname, kwargs[attrname])
+            newobj._set_attr(attrname, kwargs[attrname])
             pass
         if _frozen:
             newobj._freeze()
@@ -824,10 +1003,94 @@ class ONDEProxy(object):
     _path = None # ONDEPath of the object we are proxying
     _obj = None # The actual object we are proxying
     _obj_snap = None # Snapshot from which we obtained _obj
+    _trans = None # Transaction may be none not inside a transaction
+    
+    def __init__(self, **kwargs):
+        __dict__ = object.__getattribute__(self, "__dict__")
+
+        for arg in kwargs:
+            if arg in __dict__:
+                # setattr(self, arg, kwargs[arg])
+                object.__setattr__(self, arg, kwargs[arg])
+
+                pass
+            else:
+                raise ValueError(f"ONDEProxy; unknown attribute {arg:s}")
+            pass
+        pass
+
+    @classmethod
+    def new_from_proxy(cls, parent, attr_name):
+        _graph = object.__getattribute__(parent, "_graph")
+
+        parent_obj = object.__getattribute__(parent, "_obj")
+        _obj = parent_obj._get_attr(attr_name)
+        _obj_snap = object.__getattribute__(parent, "_obj_snap")
+
+        _parent_path = object.__getattribute__(parent, "_path")
+        path = ONDEPath(_parent_path + [attr_name])
+
+        _trans = object.__getattribute__(parent, "_trans")
+
+        return cls(_graph=_graph, _path=path, _obj=_obj, _obj_snap=_obj_snap, _trans=_trans)
+
+    @classmethod
+    def new_from_snapshot(cls, graph, snapshot):
+        path = ONDEPath()
+
+        return cls(_graph=graph, _path=path, _obj=snapshot, _obj_snap=snapshot)
+    
+    @classmethod
+    def new_from_transaction(cls, transaction, snapshot):
+        _graph = transaction.graph
+        _path = ONDEPath()
+
+        return cls(_graph=_graph, _path=_path, _obj=snapshot, _obj_snap=snapshot, _trans=transaction)
+
+    def __getattribute__(self, name):
+        _get_attr = object.__getattribute__(self, "_get_attr")
+        return _get_attr(name)
+
+    def _get_attr(self, name):
+        parent_obj = object.__getattribute__(self, "_obj")
+        _obj = parent_obj._get_attr(name)
+
+        if isinstance(_obj, ONDEBase):
+            return self.__class__.new_from_proxy(self, name)
+
+        return _obj
+    
+
+    def _set_attr(self, name, value):
+        _trans = object.__getattribute__(self, "_trans")
+
+        if _trans is None:
+            _graph = object.__getattribute__(self, "_graph")
+
+            # to do: need to add include and exclude scopes
+            transaction = ONDETransaction(_graph)
+
+            with transaction as proxy:
+                # proxy now has a potentially updated snapshot that we should
+                # use for the transaction. Need to use our path to recreate our
+                # object and then call _set_attr on that.
+                
+                pass
+
+            pass
+
+        else:
+            # to do: else clause that actually makes the change
+            pass
+
+        pass
+
     pass
 
 
-
+# rough api of transactions
+# with ONDETransaction(graph, include_scope, exclude_scope) as transaction:
+#     transaction.obj.attr = "hello"
 
 
 #class ONDEOperation(object):
