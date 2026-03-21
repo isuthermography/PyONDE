@@ -300,6 +300,10 @@ class ONDEOpScope(object):
     exclude_paths = None # List of ONDEPath objects
     exclude_objects = None #  List of objects to be excluded
 
+    # to do: the paths in the onde op scope will generally end with an
+    # attribute name or an array index and the scope starts from only that
+    # attribute of the object
+
     pass
 
 
@@ -1004,6 +1008,8 @@ class ONDEProxy(object):
     _obj = None # The actual object we are proxying
     _obj_snap = None # Snapshot from which we obtained _obj
     _trans = None # Transaction may be none not inside a transaction
+
+    # to do: needs to include scope, within the proxy, separate from transaction
     
     def __init__(self, **kwargs):
         __dict__ = object.__getattribute__(self, "__dict__")
@@ -1071,16 +1077,39 @@ class ONDEProxy(object):
             transaction = ONDETransaction(_graph)
 
             with transaction as proxy:
-                # proxy now has a potentially updated snapshot that we should
-                # use for the transaction. Need to use our path to recreate our
-                # object and then call _set_attr on that.
-                
+                # to do: proxy now has a potentially updated snapshot that we
+                # should  use for the transaction. Need to use our path to
+                # recreate our object and then call _set_attr on that.
+
                 pass
 
             pass
 
         else:
             # to do: else clause that actually makes the change
+
+            # to do: proposed algorithm:
+            # 
+            # step 1: follow each starting location path to its end; then, continue to walk the graph, ignoring explicitly excluded (edges or paths?) while accumulating all nodes into a dict (indexed by pre-existing nodes) of scope_nodes and keeping track of which edges are "fair game" for each node (i.e. all edges, if we were walking the graph, or edges called out explicitly in a starting location path)
+            #
+            # step 2: identify the node to be changed within the set (if it's not included, the new node is not referenced)
+            # 
+            # step 3: reverse walk the set of nodes, starting at the node to be changed, identifying these nodes into a new (and probably smaller) dict called changed_nodes, the keys of which are a set nodes through which the change will propagate while the values are None
+            # 
+            # step 4: iterate through the second set creating a replacement for each where we update changed_nodes, populating each entry's value with the replacement
+            # 
+            # step 5: iterate through the replacements, identifying every "fair game" reference to changed_nodes, and re-pointing that to the replacements
+            # 
+            # step 6: the result is potential replacement for the entry point for each scope starting location
+
+            # implementation plan:
+            # 
+            # we need a set of node, with each node having a set of "fair game" edges, stored globally for this operation as a dict, indexed by nodes with the values being either None (all possible edges) or a set of edges identifiers
+            # 
+            # we also need a set of references of all scope nodes that point at any given scope node of intereset
+            # 
+            # for the task above, we'll need a ScopeNode class that has a set of "fair game" edges (or None indicating that all edges are fair game) and it will need a set of referring nodes; as we assemble the scope_nodes dictionary, any time we find a node that we have seen before, we add to the referring node set of the ScopeNode, rather than creating a new ScopeNode
+
             pass
 
         pass
