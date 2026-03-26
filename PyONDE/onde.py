@@ -130,7 +130,7 @@ class TwoWayArray(object):
     _byobjid = None # id(object) dictionary, contains frozensets of strings
     _lock = None # threading.Lock object protecting _byindex and _byobjid from changes. This lock is last in the locking order, ie you may not acquire any other lock while holding this lock.
     _frozen = None # Boolean. Dictionary cannot be modified once frozen
-    
+
     def __init__(self, byindex=None,shape = None):
         """Pass an existing array or None as byindex"""
         if shape is None:
@@ -270,6 +270,7 @@ class ONDETransaction(object):
     """Represents a transaction in which the ONDEGraph is modified"""
     graph = None # ONDEGraph object
     scope = None
+    snap = None # This is the snapshot we're modifying
 
     def __init__(self, graph, include_scope=None, exclude_scope=None):
         self.graph = graph
@@ -281,9 +282,9 @@ class ONDETransaction(object):
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.acquire()
 
-        snapshot = object.__getattribute__(self.graph, "_latest_snap")
+        self.snap = object.__getattribute__(self.graph, "_latest_snap")
 
-        return ONDEProxy.new_from_transaction(self, snapshot)
+        return ONDEProxy.new_from_transaction(self)
 
     def __exit__(self, exc_type, exc, tb):
         _lock = object.__getattribute__(self.graph, "_lock")
@@ -383,10 +384,16 @@ class ONDEBase(object):
         _referencedby.add(obj_that_references_us)
         pass
 
+    def _follow_path(self, path):
+        if len(path) == 0:
+            return self
+
+        raise AttributeError(f"{self.__class__.__name__} is a leaf node attempting to follow path {str(path)}")
+
     @classmethod
     def new(cls):
         raise RuntimeError("ONDEBase class is not independently instantiatable")
-    
+
     pass
 
 class ONDEValue(ONDEBase):
@@ -624,6 +631,19 @@ class ONDEReferenceArray(ONDEBase):
         super()._freeze()
         pass
 
+    def _follow_path(self, path):
+        if len(path) == 0:
+            return self
+
+        path_entry = path[0]
+
+        if isinstance(path_entry, numbers.Integral) or isinstance(path_entry, collections.abc.Sequence):
+            return self.refs[path_entry]._follow_path(path[1:])
+        else:
+            raise AttributeError(f"Cannot index {self.__class__.__name__} by {path_entry}")
+        
+        pass
+
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
         return cls(None, refs = refs, shape = shape, **kwargs)
@@ -732,6 +752,19 @@ class ONDEObject(ONDEBase):
             pass
         
         super()._freeze()
+        pass
+
+    def _follow_path(self, path):
+        if len(path) == 0:
+            return self
+
+        path_entry = path[0]
+
+        if isinstance(path_entry, str):
+            return self._get_attr(path_entry)._follow_path(path[1:])
+        else:
+            raise AttributeError(f"Cannot index {self.__class__.__name__} by {path_entry}")
+        
         pass
     
     @classmethod
@@ -1000,17 +1033,41 @@ class ONDEClassDefinitions(object):
         return class_defs
     pass
 
+def graph_replace_node(_trans, _scope, _path, copy):
+    # to do: proposed algorithm:
+    # 
+    # step 1: follow each starting location path to its end; then, continue to walk the graph, ignoring explicitly excluded (edges or paths?) while accumulating all nodes into a dict (indexed by pre-existing nodes) of scope_nodes and keeping track of which edges are "fair game" for each node (i.e. all edges, if we were walking the graph, or edges called out explicitly in a starting location path)
+    #
+    # step 2: identify the node to be changed within the set (if it's not included, the new node is not referenced)
+    # 
+    # step 3: reverse walk the set of nodes, starting at the node to be changed, identifying these nodes into a new (and probably smaller) dict called changed_nodes, the keys of which are a set nodes through which the change will propagate while the values are None
+    # 
+    # step 4: iterate through the second set creating a replacement for each where we update changed_nodes, populating each entry's value with the replacement
+    # 
+    # step 5: iterate through the replacements, identifying every "fair game" reference to changed_nodes, and re-pointing that to the replacements
+    # 
+    # step 6: the result is potential replacement for the entry point for each scope starting location
+
+    # implementation plan:
+    # 
+    # we need a set of node, with each node having a set of "fair game" edges, stored globally for this operation as a dict, indexed by nodes with the values being either None (all possible edges) or a set of edges identifiers
+    # 
+    # we also need a set of references of all scope nodes that point at any given scope node of intereset
+    # 
+    # for the task above, we'll need a ScopeNode class that has a set of "fair game" edges (or None indicating that all edges are fair game) and it will need a set of referring nodes; as we assemble the scope_nodes dictionary, any time we find a node that we have seen before, we add to the referring node set of the ScopeNode, rather than creating a new ScopeNode
+
+    pass
 
 class ONDEProxy(object):
     """Mutable proxy reference to a graph entry that remembers context."""
     _graph = None # ONDEGraph object we started with 
     _path = None # ONDEPath of the object we are proxying
-    _obj = None # The actual object we are proxying
-    _obj_snap = None # Snapshot from which we obtained _obj
+    # _obj = None # The actual object we are proxying
+    # _obj_snap = None # Snapshot from which we obtained _obj
     _trans = None # Transaction may be none not inside a transaction
+    _scope = None # A scope separate from the one in _trans (if None, use the scope from _trans)
+    _snap = None # Snapshot; only used if there is no transaction
 
-    # to do: needs to include scope, within the proxy, separate from transaction
-    
     def __init__(self, **kwargs):
         __dict__ = object.__getattribute__(self, "__dict__")
 
@@ -1029,42 +1086,55 @@ class ONDEProxy(object):
     def new_from_proxy(cls, parent, attr_name):
         _graph = object.__getattribute__(parent, "_graph")
 
-        parent_obj = object.__getattribute__(parent, "_obj")
-        _obj = parent_obj._get_attr(attr_name)
-        _obj_snap = object.__getattribute__(parent, "_obj_snap")
+        # parent_obj = object.__getattribute__(parent, "_obj")
+        # _obj = parent_obj._get_attr(attr_name)
+        # _obj_snap = object.__getattribute__(parent, "_obj_snap")
 
         _parent_path = object.__getattribute__(parent, "_path")
         path = ONDEPath(_parent_path + [attr_name])
 
         _trans = object.__getattribute__(parent, "_trans")
 
-        return cls(_graph=_graph, _path=path, _obj=_obj, _obj_snap=_obj_snap, _trans=_trans)
+        return cls(_graph=_graph, _path=path, _trans=_trans)
 
     @classmethod
     def new_from_snapshot(cls, graph, snapshot):
         path = ONDEPath()
-
-        return cls(_graph=graph, _path=path, _obj=snapshot, _obj_snap=snapshot)
+        return cls(_graph=graph, _path=path, _snap=snapshot)
     
     @classmethod
-    def new_from_transaction(cls, transaction, snapshot):
+    def new_from_transaction(cls, transaction):
         _graph = transaction.graph
         _path = ONDEPath()
 
-        return cls(_graph=_graph, _path=_path, _obj=snapshot, _obj_snap=snapshot, _trans=transaction)
+        return cls(_graph=_graph, _path=_path, _trans=transaction)
+    
+    def _get_obj(self):
+        trans = object.__getattribute__(self, "_trans")
+
+        if trans is not None:
+            snap = trans.snap
+            pass
+
+        else:
+            snap = trans.graph._latest_snap
+            pass
+
+        _path = object.__getattribute__(self, "_path")
+        return snap._follow_path(_path)
 
     def __getattribute__(self, name):
         _get_attr = object.__getattribute__(self, "_get_attr")
         return _get_attr(name)
 
     def _get_attr(self, name):
-        parent_obj = object.__getattribute__(self, "_obj")
-        _obj = parent_obj._get_attr(name)
+        obj = self._get_obj()
+        attr_obj = obj._get_attr(name)
 
-        if isinstance(_obj, ONDEBase):
+        if isinstance(attr_obj, ONDEBase):
             return self.__class__.new_from_proxy(self, name)
 
-        return _obj
+        return attr_obj
     
 
     def _set_attr(self, name, value):
@@ -1086,29 +1156,20 @@ class ONDEProxy(object):
             pass
 
         else:
-            # to do: else clause that actually makes the change
+            # to do: create replacement node that has the desired change
+            # obj = object.__getattribute__(self, "_obj")
+            
+            # create a new object of obj's class, passing the original that we want to copy as its first constructor parameter; the ONDE classes are built to handle this
+            _get_obj = object.__getattribute__(self, "_get_obj")
+            obj = _get_obj()
+            copy = obj.__class__(obj)
+            
+            copy._set_attr(name, value)
+            copy._freeze()
 
-            # to do: proposed algorithm:
-            # 
-            # step 1: follow each starting location path to its end; then, continue to walk the graph, ignoring explicitly excluded (edges or paths?) while accumulating all nodes into a dict (indexed by pre-existing nodes) of scope_nodes and keeping track of which edges are "fair game" for each node (i.e. all edges, if we were walking the graph, or edges called out explicitly in a starting location path)
-            #
-            # step 2: identify the node to be changed within the set (if it's not included, the new node is not referenced)
-            # 
-            # step 3: reverse walk the set of nodes, starting at the node to be changed, identifying these nodes into a new (and probably smaller) dict called changed_nodes, the keys of which are a set nodes through which the change will propagate while the values are None
-            # 
-            # step 4: iterate through the second set creating a replacement for each where we update changed_nodes, populating each entry's value with the replacement
-            # 
-            # step 5: iterate through the replacements, identifying every "fair game" reference to changed_nodes, and re-pointing that to the replacements
-            # 
-            # step 6: the result is potential replacement for the entry point for each scope starting location
+            graph_replace_node(_trans, _scope, _path, copy)
 
-            # implementation plan:
-            # 
-            # we need a set of node, with each node having a set of "fair game" edges, stored globally for this operation as a dict, indexed by nodes with the values being either None (all possible edges) or a set of edges identifiers
-            # 
-            # we also need a set of references of all scope nodes that point at any given scope node of intereset
-            # 
-            # for the task above, we'll need a ScopeNode class that has a set of "fair game" edges (or None indicating that all edges are fair game) and it will need a set of referring nodes; as we assemble the scope_nodes dictionary, any time we find a node that we have seen before, we add to the referring node set of the ScopeNode, rather than creating a new ScopeNode
+            # to do: call function to swap out the node within our graph
 
             pass
 
