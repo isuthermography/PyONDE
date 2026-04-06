@@ -282,11 +282,14 @@ class ONDETransaction(object):
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.acquire()
 
-        self.snap = object.__getattribute__(self.graph, "_latest_snap")
-
+        snap = object.__getattribute__(self.graph, "_latest_snap")
+        self.snap = ONDEGraphSnapshot(_orig=snap) # Create mutable copy of most recent snapshot
+        
         return ONDEProxy.new_from_transaction(self)
 
     def __exit__(self, exc_type, exc, tb):
+        self.snap._freeze()
+        object.__setattr__(self.graph, "_latest_snap",self.snap)
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.release()
 
@@ -298,9 +301,23 @@ class ONDETransaction(object):
 class ONDEOpScope(object):
     """Represents scope of an operation. This includes a list of paths originating at entry points that are included in the scope, and an overriding list of paths originating at entry points that are excluded from the scope"""
     include_paths = None # List of ONDEPath objects
-    exclude_paths = None # List of ONDEPath objects
-    exclude_objects = None #  List of objects to be excluded
+    exclude_paths = None # frozenset of ONDEPath objects
+    exclude_objects = None #  frozenset of objects to be excluded
 
+    def __init__(self, include_paths, exclude_paths = None, exclude_objects = None):
+        self.include_paths = include_paths
+        if exclude_paths is None:
+            exclude_paths = []
+            pass
+        self.exclude_paths = frozenset(exclude_paths)
+        
+        if exclude_objects is None:
+            exclude_objects = []
+            pass
+        self.exclude_objects = frozenset(exclude_objects)
+        pass
+        
+        
     # to do: the paths in the onde op scope will generally end with an
     # attribute name or an array index and the scope starts from only that
     # attribute of the object
@@ -308,10 +325,12 @@ class ONDEOpScope(object):
     pass
 
 
-class ONDEPath(list):
-    """A path, essentially a list of strings, starting
+class ONDEPath(tuple):
+    """A path, essentially a tuple of strings or indexes/tuples, starting
     with an entry_point name and followed by attribute names
-    for ONDEObjects, that leads to an ONDEBase."""
+    for ONDEObjects or ONDEReferenceArray indexes, that leads to an ONDEBase.
+
+    An ONDEPath is evaluated by calling the _follow_path method on the object it is relative to, passing the path as the parameter."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1032,6 +1051,16 @@ class ONDEClassDefinitions(object):
         
         return class_defs
     pass
+
+def graph_replace_node__walk(starting_path, scope, scope_nodes, trans):
+    """Trans is a transaction that has a mutable graph snapshot.
+
+    scope_nodes is a mutable dictionary, which may be already partially prepopulated, indexed by node, of either None (indicating all edges are fair game) or a set of edges, written in the form of an ONDEPath element (string or reference array index).
+
+    scope is an ONDEOpScope. starting_path is an ONDEPath indicating where to start.
+    """
+
+    snap = trans.snap
 
 def graph_replace_node(_trans, _scope, _path, copy):
     # to do: proposed algorithm:
