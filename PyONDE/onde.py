@@ -9,6 +9,7 @@ import copy
 import numbers
 import collections
 import collections.abc
+from dataclasses import dataclass, field
 import numpy as np
 
 class TwoWayDictionary(object):
@@ -332,10 +333,8 @@ class ONDEPath(tuple):
 
     An ONDEPath is evaluated by calling the _follow_path method on the object it is relative to, passing the path as the parameter."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        pass
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls,*args, **kwargs)
 
     pass
 
@@ -409,6 +408,9 @@ class ONDEBase(object):
 
         raise AttributeError(f"{self.__class__.__name__} is a leaf node attempting to follow path {str(path)}")
 
+    def _list_edges(self):
+        return []
+        
     @classmethod
     def new(cls):
         raise RuntimeError("ONDEBase class is not independently instantiatable")
@@ -657,12 +659,25 @@ class ONDEReferenceArray(ONDEBase):
         path_entry = path[0]
 
         if isinstance(path_entry, numbers.Integral) or isinstance(path_entry, collections.abc.Sequence):
-            return self.refs[path_entry]._follow_path(path[1:])
+            return self.refs[path_entry]._follow_path(ONDEPath(path[1:]))
         else:
             raise AttributeError(f"Cannot index {self.__class__.__name__} by {path_entry}")
         
         pass
 
+    def _list_edges(self):
+        nditer = self.refs.iter() #np.nditer object
+        sz = nditer.itersize()
+        
+        edgelist= []
+        for cnt in range(sz):
+            edgelist.append(nditer.multi_index)
+            if cnt < sz-1:
+                next(nditer)
+                pass
+            pass
+        return edgelist
+    
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
         return cls(None, refs = refs, shape = shape, **kwargs)
@@ -780,11 +795,17 @@ class ONDEObject(ONDEBase):
         path_entry = path[0]
 
         if isinstance(path_entry, str):
-            return self._get_attr(path_entry)._follow_path(path[1:])
+            return self._get_attr(path_entry)._follow_path(ONDEPath(path[1:]))
         else:
             raise AttributeError(f"Cannot index {self.__class__.__name__} by {path_entry}")
         
         pass
+
+    
+    def _list_edges(self):
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        edgelist= list(_ONDE_attrs.keys())
+        return edgelist
     
     @classmethod
     def new(cls, _ONDE_type = None, _ONDE_attrs = None, **kwargs):
@@ -1052,29 +1073,185 @@ class ONDEClassDefinitions(object):
         return class_defs
     pass
 
-def graph_replace_node__walk(starting_path, scope, scope_nodes, trans):
+
+@dataclass
+class ScopeNode(object):
+    referrers: Optional[set[ONDEBase]]=field(default_factory=set) # Set of referring objects.
+    edges: Optional[set[Any]]=field(default_factory=set) # Set of edge indexes. If it is None, then all edges are in scope. Usually either each edge index is either a string for an ONDEObject or a tuple of integers for an ONDEReferenceArray.
+    pass
+
+def graph_replace_node__walk(starting_path, starting_obj,referring_obj, scope, scope_nodes, trans):
     """Trans is a transaction that has a mutable graph snapshot.
 
-    scope_nodes is a mutable dictionary, which may be already partially prepopulated, indexed by node, of either None (indicating all edges are fair game) or a set of edges, written in the form of an ONDEPath element (string or reference array index).
+    scope_nodes is a mutable dictionary, which may be already partially prepopulated, indexed by node, of ScopeNode instances.
 
-    scope is an ONDEOpScope. starting_path is an ONDEPath indicating where to start.
+    scope is an ONDEOpScope.
+    starting_obj is the object corresponding to starting_path. It is not assumed to already be inserted into scope_nodes. It is assumed that starting_obj has already been checked against the exclude_objs of scope.
+    starting_path is an ONDEPath indicating the full path of starting_obj. It is assumed that starting_path has been already checked against the include_paths of scope.
+
+    Walk the graph starting at the given starting_path, ignoring explicitly excluded paths and nodes from the scope, while accumulating nodes into scope_nodes, keeping track of which edges are fair game (represented by a set corresponding to the node in scope_nodes), or where all edges are fair game (represented by None instead of the set)
     """
 
     snap = trans.snap
 
-def graph_replace_node(_trans, _scope, _path, copy):
+    # Register starting_obj into scope_nodes
+    if starting_obj in scope_nodes:
+        new=False
+        scope_node = scope_nodes[starting_obj]
+        pass
+    else:
+        new=True
+        scope_node = ScopeNode()
+        scope_nodes[starting_obj] = scope_node
+        pass
+    
+    #if starting_scope_set is not None:
+    # If we are traversing this object, then all edges are in scope, so we replace any set with None
+    
+    scope_node.edges = None
+    scope_node.referrers.add(referring_obj)
+    
+    if new:
+        edges = starting_obj._list_edges()
+
+        for edge in edges:
+            current_path = ONDEPath(starting_path + (edge,))
+            current_obj = starting_obj._follow_path(ONDEPath((edge,)))
+
+            if current_path in scope.exclude_paths:
+                continue
+
+            if current_obj in scope.exclude_objs:
+                continue
+        
+            graph_replace_node__walk(current_path, current_obj, starting_obj,scope, scope_nodes, trans)
+        
+            pass
+        pass
+    pass
+
+
+@dataclass
+class ReplacedNode(object):
+    replacement: Optional[ONDEBase]
+    refersto: set[ONDEBase]=field(default_factory=set) # Set of objects this node refers to that we might want to replace.
+    
+    pass
+
+
+def graph_replace_node__reversewalk(current_node,refersto,scope_nodes,changed_nodes):
+    if current_node not in changed_nodes:
+        new = True
+        changed_nodes[current_node] = ReplacedNode()
+        pass
+    else:
+        new = False
+        pass
+    
+    changed_nodes[current_node].refersto.add(refersto)
+    
+    if new: 
+        referrers = scope_nodes[current_node].referrers
+        
+        for referrer in referrers:
+            if referrer in changed_nodes:
+                continue
+
+            graph_replace_node__reversewalk(referrer,current_node,scope_nodes,changed_nodes)
+            pass
+        pass
+    pass
+    
+def graph_replace_node(trans, scope, path, orig_node, replacement_node):
     # to do: proposed algorithm:
     # 
     # step 1: follow each starting location path to its end; then, continue to walk the graph, ignoring explicitly excluded (edges or paths?) while accumulating all nodes into a dict (indexed by pre-existing nodes) of scope_nodes and keeping track of which edges are "fair game" for each node (i.e. all edges, if we were walking the graph, or edges called out explicitly in a starting location path)
+    snap = trans.snap
+    scope_nodes = collections.OrderedDict()
+    scope_nodes[snap] = ScopeNode() # Give the snapshot itself a blank ScopeNode
+    
+    for starting_path in scope.include_paths:
+        if starting_path in scope.exclude_paths:
+            continue
+        current_parent = snap
+        current_path = ONDEPath((,))
+        pending_path = starting_path
+        current_scope_set = scope_nodes[snap].edges
+
+        # Follow the starting path, element by element, because we need to accumulate all referrers into the scope dictionary.
+        while len(current_path) < len(starting_path)-1:
+            
+        
+            current_parent = current_parent._follow_path(ONDEPath(pending_path[0],))
+            pending_path = ONDEPath(pending_path[1:])
+            if current_parent in scope_nodes:
+                current_scope_node = scope_nodes[current_parent]
+                current_scope_set = current_scope_node.edges
+                pass
+            else:
+                current_scope_node = ScopeNode()
+                current_scope_set = current_scope_node.edges
+                scope_nodes[current_parent] = current_scope_node
+                pass
+            current_scope_node.referrers.add(current_parent)
+            pass
+
+        
+        if current_scope_set is not None:
+            current_scope_set.add(starting_path[-1])
+            pass
+        
+        starting_obj = starting_parent._follow_path(ONDEPath((starting_path[-1],)))
+        if starting_obj in scope.exclude_objs:
+            continue
+        
+        graph_replace_node__walk(starting_path, starting_obj, starting_parent, scope, scope_nodes, trans)
+        pass
+    
     #
     # step 2: identify the node to be changed within the set (if it's not included, the new node is not referenced)
-    # 
-    # step 3: reverse walk the set of nodes, starting at the node to be changed, identifying these nodes into a new (and probably smaller) dict called changed_nodes, the keys of which are a set nodes through which the change will propagate while the values are None
-    # 
-    # step 4: iterate through the second set creating a replacement for each where we update changed_nodes, populating each entry's value with the replacement
-    # 
+    #
+    if not orig_node in scope_nodes:
+        return
+    # step 3: reverse walk the set of nodes, starting at the node to be changed, identifying these nodes into a new (and probably smaller) dict called changed_nodes, the keys of which are a set of nodes through which the change will propagate while the values are ReplacedNode objects with the replacement set to None
+    #
+    changed_nodes = collections.OrderedDict()
+
+    current_node = orig_node
+
+    graph_replace_nodes__reversewalk(current_node,,scope_nodes,changed_nodes)
+
+    
+
+    
+    # step 4: iterate through the second set creating a replacement for each where we update changed_nodes, populating each entry's value with the replacement stored in a ReplacedNode object
+    #
+    changed_node_indexes = list(changed_nodes.keys())
+    
+    for changed_node in changed_node_indexes:
+        if changed_node is not orig_node:
+            if changed_node._frozen:
+                replacement = changed_node.__class__(_orig = changed_node)
+                pass
+            else:
+                replacement = changed_node
+                pass
+            pass
+        else:
+            replacement = replacement_node
+            pass
+        changed_nodes[changed_node] = replacement
+        pass
+        
+
+
+    
     # step 5: iterate through the replacements, identifying every "fair game" reference to changed_nodes, and re-pointing that to the replacements
-    # 
+    #
+
+    for replaced_node in changed_nodes:
+        replacement = changed_nodes[replaced_node]
+    
     # step 6: the result is potential replacement for the entry point for each scope starting location
 
     # implementation plan:
@@ -1191,14 +1368,20 @@ class ONDEProxy(object):
             # create a new object of obj's class, passing the original that we want to copy as its first constructor parameter; the ONDE classes are built to handle this
             _get_obj = object.__getattribute__(self, "_get_obj")
             obj = _get_obj()
-            copy = obj.__class__(obj)
-            
-            copy._set_attr(name, value)
-            copy._freeze()
-
-            graph_replace_node(_trans, _scope, _path, copy)
-
-            # to do: call function to swap out the node within our graph
+            if obj._frozen:
+                replacement = obj.__class__(obj)
+                new = True
+                pass
+            else:
+                replacement = obj
+                new = False
+                pass
+                
+            replacement._set_attr(name, value)
+            #replacement._freeze() Freezing happens at the end of the transaction
+            #if new: # We could avoid the replacement for preexisting modifications if we knew that the scope of the previous modification matched our scope.
+            graph_replace_node(_trans, _scope, obj, replacement)
+                
 
             pass
 
