@@ -318,6 +318,8 @@ class ONDEOpScope(object):
         self.exclude_objects = frozenset(exclude_objects)
         pass
         
+    def __hash__(self):
+        return hash((tuple(self.include_paths), self.exclude_paths, self.exclude_objects))
         
     # to do: the paths in the onde op scope will generally end with an
     # attribute name or an array index and the scope starts from only that
@@ -342,6 +344,7 @@ class ONDEBase(object):
     # _graph = None # ONDEGraph object
     _referencedby = None # set of ONDEBase objects that reference this object. They should all be part of the given ONDEGraph. The _referencedby member can still be changed even after an instance is frozen becuase new objects can reference it. Note that the _referencedby field is generally only updated to include new objects when those objects become frozen.
     _frozen = None # True/False: has this object been finalized and therefore become immutable
+    _modification_scopes = None # A set of scopes for which the ancestor nodes in the graph have been replaced for the transaction in which this node is being updated. It is only valid for use within the context of the transaction in which the node is being created and it is cleared when the node is frozen.
 
     def __init__(self, _orig = None, **kwargs):
         _referencedby = None
@@ -366,6 +369,9 @@ class ONDEBase(object):
         object.__setattr__(self, "_frozen", False)
         if _frozen:
             self._freeze() # Derived class may have additional operations
+            pass
+        else:
+            object.__setattr__(self, "_modification_scopes", set())
             pass
         pass
 
@@ -394,6 +400,7 @@ class ONDEBase(object):
         _frozen = object.__getattribute__(self, "_frozen")
         if _frozen:
             raise RuntimeError("Attempting to freeze an object that is already frozen")
+        object.__setattr__(self, "_modification_scopes", None)
         object.__setattr__(self, "_frozen", True)
         pass
 
@@ -1219,7 +1226,7 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
 
     current_node = orig_node
 
-    graph_replace_nodes__reversewalk(current_node,,scope_nodes,changed_nodes)
+    graph_replace_node__reversewalk(current_node,,scope_nodes,changed_nodes)
 
     
 
@@ -1230,12 +1237,16 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
     
     for changed_node in changed_node_indexes:
         if changed_node is not orig_node:
-            if changed_node._frozen:
+            # check to see if the changed node is frozen; if has modification scopes been cleared?
+            if changed_node._modification_scopes is None:
                 replacement = changed_node.__class__(_orig = changed_node)
                 pass
             else:
                 replacement = changed_node
                 pass
+
+            replacement._modification_scopes.add(scope)
+
             pass
         else:
             replacement = replacement_node
@@ -1250,8 +1261,13 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
     #
 
     for replaced_node in changed_nodes:
-        replacement = changed_nodes[replaced_node]
-    
+        replacement = changed_nodes[replaced_node].replacement
+        scope_node = scope_nodes[replaced_node]
+        fair_game_edges = scope_node.edges
+        refersto = changed_nodes[replaced_node].refersto
+        # refersto is a set of ONDEBase that includes all of the outgoing-referenced-objects reffered to by replacement that may need to be repointed at a newly created copy that is findable by changed_nodes
+        # Only those edges listed in fair_game_edges (or all edges if fair_game_edges is None) need to be swapped out.
+
     # step 6: the result is potential replacement for the entry point for each scope starting location
 
     # implementation plan:
@@ -1368,8 +1384,16 @@ class ONDEProxy(object):
             # create a new object of obj's class, passing the original that we want to copy as its first constructor parameter; the ONDE classes are built to handle this
             _get_obj = object.__getattribute__(self, "_get_obj")
             obj = _get_obj()
-            if obj._frozen:
-                replacement = obj.__class__(obj)
+            scope = object.__getattribute__(self, "_scope")
+
+            if scope is None:
+                scope = _trans.scope
+
+            # if obj._frozen:
+            if obj._modification_scopes is None:
+                replacement = obj.__class__(_orig=obj)
+                # object.__setattr__(replacement, "_modification_scopes", set([scope]))
+                replacement._modification_scopes.add(scope)
                 new = True
                 pass
             else:
@@ -1380,8 +1404,10 @@ class ONDEProxy(object):
             replacement._set_attr(name, value)
             #replacement._freeze() Freezing happens at the end of the transaction
             #if new: # We could avoid the replacement for preexisting modifications if we knew that the scope of the previous modification matched our scope.
-            graph_replace_node(_trans, _scope, obj, replacement)
-                
+            if new or scope not in obj._modification_scopes:
+                replacement._modification_scopes.add(scope)
+                graph_replace_node(_trans, scope, obj, replacement)
+                pass
 
             pass
 
