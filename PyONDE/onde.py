@@ -417,7 +417,12 @@ class ONDEBase(object):
 
     def _list_edges(self):
         return []
-        
+
+    def _indices_for_object(self,obj):
+        """identify all of the indices for self that reference object obj. Returns a frozenset."""
+        return frozenset()
+    
+    
     @classmethod
     def new(cls):
         raise RuntimeError("ONDEBase class is not independently instantiatable")
@@ -684,6 +689,10 @@ class ONDEReferenceArray(ONDEBase):
                 pass
             pass
         return edgelist
+
+    def _indices_for_object(self,obj):
+        """identify all of the indices for self that reference object obj. Returns a frozenset."""
+        return refs(obj) # __call__ method does reverse lookup to return a set of indices 
     
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
@@ -813,6 +822,11 @@ class ONDEObject(ONDEBase):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
         edgelist= list(_ONDE_attrs.keys())
         return edgelist
+
+    def _indices_for_object(self,obj):
+        """identify all of the indices for self that reference object obj. Returns a frozenset."""
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        return _ONDE_attrs(obj) # __call__ method does reverse lookup to return a set of indices
     
     @classmethod
     def new(cls, _ONDE_type = None, _ONDE_attrs = None, **kwargs):
@@ -1267,7 +1281,18 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
         refersto = changed_nodes[replaced_node].refersto
         # refersto is a set of ONDEBase that includes all of the outgoing-referenced-objects reffered to by replacement that may need to be repointed at a newly created copy that is findable by changed_nodes
         # Only those edges listed in fair_game_edges (or all edges if fair_game_edges is None) need to be swapped out.
-
+        for dest in refersto:
+            dest_indices = replaced_node._indices_for_object(dest)
+            if fair_game_edges is not None:
+                dest_indices = dest_indices.intersection(fair_game_edges)
+                pass
+            for dest_index in dest_indices:
+                replacement[dest_index] = changed_nodes[dest].replacement
+                pass
+            pass
+        pass
+    
+        
     # step 6: the result is potential replacement for the entry point for each scope starting location
 
     # implementation plan:
