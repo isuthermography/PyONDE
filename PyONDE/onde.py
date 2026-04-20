@@ -10,6 +10,7 @@ import numbers
 import collections
 import collections.abc
 from dataclasses import dataclass, field
+from typing import Optional, Any
 import numpy as np
 
 class TwoWayDictionary(object):
@@ -39,8 +40,8 @@ class TwoWayDictionary(object):
             obj = bystrings[s]
             
             if obj is not None:
-                if id(obj) in self._byobjid:
-                    idx_set = self._byobjid[id(obj)]
+                if id(obj) in byobjid:
+                    idx_set = byobjid[id(obj)]
                     pass
                 else:
                     idx_set = frozenset()
@@ -60,7 +61,7 @@ class TwoWayDictionary(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name == "_freeze" or name == "_frozen":
+            if name in {"_freeze", "_frozen", "_set_attr", "_get_attr"}:
                 return object.__getattribute__(self, name)
             raise IndexError("TwoWayDictionary: Indexes are not allowed to have leading underscores")
 
@@ -234,6 +235,12 @@ class ONDEGraph(object):
         pass
     
     def __getattribute__(self, name):
+        if name.startswith("_"):
+            
+            if name in {"_set_attr", "_get_attr","__dict__","__dir__","_latest_snap","_lock"}:
+                return object.__getattribute__(self, name)
+            pass
+        
         _get_attr = object.__getattribute__(self, "_get_attr")
         return _get_attr(name)
     
@@ -275,7 +282,9 @@ class ONDETransaction(object):
 
     def __init__(self, graph, include_scope=None, exclude_scope=None):
         self.graph = graph
-        self.scope = ONDEOpScope(include_scope, exclude_scope)
+        if include_scope is not None:
+            self.scope = ONDEOpScope(include_scope, exclude_scope)
+            pass
         
         pass
 
@@ -415,6 +424,9 @@ class ONDEBase(object):
 
         raise AttributeError(f"{self.__class__.__name__} is a leaf node attempting to follow path {str(path)}")
 
+    def _assign_pathel(self, pathel, value):
+        raise AttributeError(f"{self.__class__.__name__} is a leaf node and does not support element assignment of {str(pathel)} to {str(value)}")
+    
     def _list_edges(self):
         return []
 
@@ -538,7 +550,7 @@ class ONDEArray(ONDEBase):
         if self._frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
 
-        self.el_value[index] = el_value
+        self.value[index] = el_value
         pass
 
     def _get_attr(self, name):
@@ -677,6 +689,12 @@ class ONDEReferenceArray(ONDEBase):
         
         pass
 
+    def _assign_pathel(self, pathel, value):
+        if self._frozen:
+            raise RuntimeError(f"Cannot assign {str(value)} to {str(pathel)} element of frozen object")
+        self.refs[pathel]=value
+        pass
+    
     def _list_edges(self):
         nditer = self.refs.iter() #np.nditer object
         sz = nditer.itersize()
@@ -692,7 +710,7 @@ class ONDEReferenceArray(ONDEBase):
 
     def _indices_for_object(self,obj):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
-        return refs(obj) # __call__ method does reverse lookup to return a set of indices 
+        return self.refs(obj) # __call__ method does reverse lookup to return a set of indices 
     
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
@@ -744,7 +762,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -817,6 +835,11 @@ class ONDEObject(ONDEBase):
         
         pass
 
+    def _assign_pathel(self, pathel, value):
+        if self._frozen:
+            raise RuntimeError(f"Cannot assign {str(value)} to {str(pathel)} element of frozen object")
+        self._set_attr(pathel, value)
+        pass
     
     def _list_edges(self):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
@@ -884,7 +907,7 @@ class ONDEField(object):
     name = None # Field name, not including prefix or separating colon
     comments = None # Documentation string
     mandatory = None # True for mandatory attributes/datasets
-    dataset = None # True for dataset storage, False for attribute storage
+    storage = None # "D" for dataset storage, "A" for attribute storage, "A or D" for either
     content_class_string = None # Referenced type
     dimensionality_string = None # Dimensionality field from .csv
     size_or_content_string = None # Value field from .csv
@@ -916,12 +939,12 @@ class ONDEField(object):
         if mandatory_optional not in ["M", "O"]:
             raise ValueError(f"Mandatory/Optional field is not either O or M defining {name:s}")
         
-        if dataset_attribute not in ["D", "A"]:
+        if dataset_attribute not in ["A", "D","A or D"]:
             raise ValueError(f"Dataset/Attribute field is not either D or A defining {name:s}")
         
         name_only = name_split[1]
         mandatory = mandatory_optional == "M"
-        dataset = dataset_attribute == "D"
+        storage = dataset_attribute
 
         return cls(
             defining_class=classname,
@@ -929,7 +952,7 @@ class ONDEField(object):
             name=name_only,
             comments=comments,
             mandatory=mandatory,
-            dataset=dataset,
+            storage=storage,
             content_class_string=content_class,
             dimensionality_string=dims,
             size_or_content_string=size_or_content
@@ -1154,8 +1177,8 @@ def graph_replace_node__walk(starting_path, starting_obj,referring_obj, scope, s
 
 @dataclass
 class ReplacedNode(object):
-    replacement: Optional[ONDEBase]
-    refersto: set[ONDEBase]=field(default_factory=set) # Set of objects this node refers to that we might want to replace.
+    replacement: Optional[ONDEBase]=None
+    refersto: Optional[set[ONDEBase]]=field(default_factory=set) # Set of objects this node refers to that we might want to replace.
     
     pass
 
@@ -1169,7 +1192,7 @@ def graph_replace_node__reversewalk(current_node,refersto,scope_nodes,changed_no
         new = False
         pass
     
-    changed_nodes[current_node].refersto.add(refersto)
+    changed_nodes[current_node].refersto.update(refersto)
     
     if new: 
         referrers = scope_nodes[current_node].referrers
@@ -1178,7 +1201,7 @@ def graph_replace_node__reversewalk(current_node,refersto,scope_nodes,changed_no
             if referrer in changed_nodes:
                 continue
 
-            graph_replace_node__reversewalk(referrer,current_node,scope_nodes,changed_nodes)
+            graph_replace_node__reversewalk(referrer,set([current_node]),scope_nodes,changed_nodes)
             pass
         pass
     pass
@@ -1194,16 +1217,21 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
     for starting_path in scope.include_paths:
         if starting_path in scope.exclude_paths:
             continue
+
+        
         current_parent = snap
-        current_path = ONDEPath((,))
+        current_path = ONDEPath(())
         pending_path = starting_path
         current_scope_set = scope_nodes[snap].edges
-
+        
         # Follow the starting path, element by element, because we need to accumulate all referrers into the scope dictionary.
         while len(current_path) < len(starting_path)-1:
-            
-        
-            current_parent = current_parent._follow_path(ONDEPath(pending_path[0],))
+            current_scope_set.add(pending_path[0])
+            current_path = ONDEPath(current_path + (pending_path[0],))
+
+            current_parent_parent=current_parent
+            current_parent = current_parent._follow_path(ONDEPath((pending_path[0],)))
+            #print("current_parent=",str(current_path))
             pending_path = ONDEPath(pending_path[1:])
             if current_parent in scope_nodes:
                 current_scope_node = scope_nodes[current_parent]
@@ -1214,25 +1242,30 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
                 current_scope_set = current_scope_node.edges
                 scope_nodes[current_parent] = current_scope_node
                 pass
-            current_scope_node.referrers.add(current_parent)
+            current_scope_node.referrers.add(current_parent_parent)
             pass
-
         
         if current_scope_set is not None:
-            current_scope_set.add(starting_path[-1])
+            current_scope_set.add(pending_path[0])
             pass
         
+        
+
+        assert(starting_path[-1] == pending_path[0])
+        starting_parent = current_parent
         starting_obj = starting_parent._follow_path(ONDEPath((starting_path[-1],)))
-        if starting_obj in scope.exclude_objs:
+        if starting_obj in scope.exclude_objects:
             continue
         
         graph_replace_node__walk(starting_path, starting_obj, starting_parent, scope, scope_nodes, trans)
         pass
-    
+    #print("scope_nodes=",scope_nodes)
+
+        
     #
     # step 2: identify the node to be changed within the set (if it's not included, the new node is not referenced)
     #
-    if not orig_node in scope_nodes:
+    if orig_node not in scope_nodes:
         return
     # step 3: reverse walk the set of nodes, starting at the node to be changed, identifying these nodes into a new (and probably smaller) dict called changed_nodes, the keys of which are a set of nodes through which the change will propagate while the values are ReplacedNode objects with the replacement set to None
     #
@@ -1240,10 +1273,10 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
 
     current_node = orig_node
 
-    graph_replace_node__reversewalk(current_node,,scope_nodes,changed_nodes)
+    graph_replace_node__reversewalk(current_node,set([]),scope_nodes,changed_nodes)
 
     
-
+    #print("changed_nodes=",changed_nodes)
     
     # step 4: iterate through the second set creating a replacement for each where we update changed_nodes, populating each entry's value with the replacement stored in a ReplacedNode object
     #
@@ -1265,10 +1298,13 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
         else:
             replacement = replacement_node
             pass
-        changed_nodes[changed_node] = replacement
+        changed_nodes[changed_node].replacement = replacement
         pass
         
 
+    
+    #print("changed_nodes=",changed_nodes)
+    
 
     
     # step 5: iterate through the replacements, identifying every "fair game" reference to changed_nodes, and re-pointing that to the replacements
@@ -1279,7 +1315,7 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
         scope_node = scope_nodes[replaced_node]
         fair_game_edges = scope_node.edges
         refersto = changed_nodes[replaced_node].refersto
-        # refersto is a set of ONDEBase that includes all of the outgoing-referenced-objects reffered to by replacement that may need to be repointed at a newly created copy that is findable by changed_nodes
+        # refersto is a set of ONDEBase that includes all of the outgoing-referenced-objects referred to by replacement that may need to be repointed at a newly created copy that is findable by changed_nodes
         # Only those edges listed in fair_game_edges (or all edges if fair_game_edges is None) need to be swapped out.
         for dest in refersto:
             dest_indices = replaced_node._indices_for_object(dest)
@@ -1287,7 +1323,7 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
                 dest_indices = dest_indices.intersection(fair_game_edges)
                 pass
             for dest_index in dest_indices:
-                replacement[dest_index] = changed_nodes[dest].replacement
+                replacement._assign_pathel(dest_index, changed_nodes[dest].replacement)
                 pass
             pass
         pass
@@ -1316,10 +1352,10 @@ class ONDEProxy(object):
     _snap = None # Snapshot; only used if there is no transaction
 
     def __init__(self, **kwargs):
-        __dict__ = object.__getattribute__(self, "__dict__")
+        # _dict = object.__getattribute__(self, "__dict__")
 
         for arg in kwargs:
-            if arg in __dict__:
+            if arg in type(self).__dict__:
                 # setattr(self, arg, kwargs[arg])
                 object.__setattr__(self, arg, kwargs[arg])
 
@@ -1338,7 +1374,7 @@ class ONDEProxy(object):
         # _obj_snap = object.__getattribute__(parent, "_obj_snap")
 
         _parent_path = object.__getattribute__(parent, "_path")
-        path = ONDEPath(_parent_path + [attr_name])
+        path = ONDEPath(_parent_path + (attr_name,))
 
         _trans = object.__getattribute__(parent, "_trans")
 
@@ -1371,9 +1407,21 @@ class ONDEProxy(object):
         return snap._follow_path(_path)
 
     def __getattribute__(self, name):
+        if name.startswith("_"):
+            if name in { "_set_attr", "_get_attr","_get_obj","__class__","__dict__"}:
+                return object.__getattribute__(self, name)
+            elif  name in {"_freeze", "_frozen",}:
+                obj = self._get_obj()
+                return getattr(obj,name)
+            pass
         _get_attr = object.__getattribute__(self, "_get_attr")
         return _get_attr(name)
 
+    def __setattr__(self,name,value):
+        _set_attr = object.__getattribute__(self, "_set_attr")
+        _set_attr(name,value)
+        pass
+    
     def _get_attr(self, name):
         obj = self._get_obj()
         attr_obj = obj._get_attr(name)
@@ -1386,6 +1434,8 @@ class ONDEProxy(object):
 
     def _set_attr(self, name, value):
         _trans = object.__getattribute__(self, "_trans")
+        #import pdb
+        #pdb.set_trace()
 
         if _trans is None:
             _graph = object.__getattribute__(self, "_graph")
@@ -1397,7 +1447,9 @@ class ONDEProxy(object):
                 # to do: proxy now has a potentially updated snapshot that we
                 # should  use for the transaction. Need to use our path to
                 # recreate our object and then call _set_attr on that.
-
+                path = object.__getattribute__(self,"_path")
+                newproxy = proxy._follow_path(path)
+                setattr(newproxy,name,value)
                 pass
 
             pass
@@ -1410,9 +1462,15 @@ class ONDEProxy(object):
             _get_obj = object.__getattribute__(self, "_get_obj")
             obj = _get_obj()
             scope = object.__getattribute__(self, "_scope")
+            path = object.__getattribute__(self, "_path")
 
             if scope is None:
                 scope = _trans.scope
+                pass
+
+            if scope is None:
+                scope = ONDEOpScope([path])
+                pass
 
             # if obj._frozen:
             if obj._modification_scopes is None:
@@ -1431,7 +1489,7 @@ class ONDEProxy(object):
             #if new: # We could avoid the replacement for preexisting modifications if we knew that the scope of the previous modification matched our scope.
             if new or scope not in obj._modification_scopes:
                 replacement._modification_scopes.add(scope)
-                graph_replace_node(_trans, scope, obj, replacement)
+                graph_replace_node(_trans, scope,path, obj, replacement)
                 pass
 
             pass
