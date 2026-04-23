@@ -218,6 +218,7 @@ class ONDEGraph(object):
     """Represents the graph of interconnected ONDE objects
     and attributes. May relate to any number of actual files."""
     _lock = None # threading.Lock that protects access to replace the snapshot.
+    _lock_ownerthread = None # Writes protected by _lock, the threading.get_ident() of whichever thread owns the lock
     _latest_snap = None # class ONDEGraphSnapshot
 
     def __init__(self, snapshot = None):
@@ -260,7 +261,7 @@ class ONDEGraph(object):
         snap_proxy = ONDEProxy.new_from_snapshot(self, _latest_snap)
         obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, name)
 
-        return _latest_snap._get_attr(name)
+        return obj_proxy # _latest_snap._get_attr(name)
     
     # def _set_attr(self, name, value):
     #     if name.startswith("_"):
@@ -280,26 +281,33 @@ class ONDETransaction(object):
     scope = None
     snap = None # This is the snapshot we're modifying
 
-    def __init__(self, graph, include_scope=None, exclude_scope=None):
+    def __init__(self, graph, include_paths=None, exclude_paths=None,exclude_objects=None):
         self.graph = graph
-        if include_scope is not None:
-            self.scope = ONDEOpScope(include_scope, exclude_scope)
-            pass
+        
+        self.scope = ONDEOpScope(self,include_paths, exclude_paths,exclude_objects)
+
         
         pass
 
     def __enter__(self):
+        lockowner = object.__getattribute__(self.graph, "_lock_ownerthread")
+        if lockowner == threading.get_ident():
+            raise RuntimeError(f"Error creating a new transaction while another transaction is already open on the graph by the same thread. This probably means that you are attempting a change on an object not accessed via the transaction. Within a transaction, always access objects via the transaction or scope objects.")
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.acquire()
 
+        object.__setattr__(self.graph, "_lock_ownerthread", threading.get_ident())
+        
         snap = object.__getattribute__(self.graph, "_latest_snap")
         self.snap = ONDEGraphSnapshot(_orig=snap) # Create mutable copy of most recent snapshot
         
-        return ONDEProxy.new_from_transaction(self)
+        return self.scope
 
+    
     def __exit__(self, exc_type, exc, tb):
         self.snap._freeze()
         object.__setattr__(self.graph, "_latest_snap",self.snap)
+        object.__setattr__(self.graph, "_lock_ownerthread", None)
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.release()
 
@@ -310,12 +318,14 @@ class ONDETransaction(object):
 
 class ONDEOpScope(object):
     """Represents scope of an operation. This includes a list of paths originating at entry points that are included in the scope, and an overriding list of paths originating at entry points that are excluded from the scope"""
-    include_paths = None # List of ONDEPath objects
+    include_paths = None # List of ONDEPath objects, or None representing no scope specified
     exclude_paths = None # frozenset of ONDEPath objects
     exclude_objects = None #  frozenset of objects to be excluded
-
-    def __init__(self, include_paths, exclude_paths = None, exclude_objects = None):
-        self.include_paths = include_paths
+    trans = None # Transaction for this scope (warning: creates reference loop)
+    
+    def __init__(self, trans,include_paths=None, exclude_paths = None, exclude_objects = None):
+        self.trans=trans
+        self.include_paths = include_paths 
         if exclude_paths is None:
             exclude_paths = []
             pass
@@ -326,7 +336,21 @@ class ONDEOpScope(object):
             pass
         self.exclude_objects = frozenset(exclude_objects)
         pass
+
+    def __enter__(self):
+
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        pass
         
+    @property
+    def graph(self):
+        return ONDEProxy.new_from_scope(self)
+
+    def rescope(self,include_paths=None, exclude_paths = None, exclude_objects = None):
+        return type(self)(include_paths, exclude_paths, exclude_objects)
+    
     def __hash__(self):
         return hash((tuple(self.include_paths), self.exclude_paths, self.exclude_objects))
         
@@ -398,6 +422,14 @@ class ONDEBase(object):
 
         raise ValueError("ONDEBase does not have attributes")
 
+    def __setattr__(self, name, value):
+        _frozen = object.__getattribute__(self, "_frozen")
+        if _frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+        object.__setattr__(self,name,value)
+        pass
+
+    
     def __copy__(self):
         new = self.__class__(self)
         return new
@@ -467,6 +499,7 @@ class ONDEValue(ONDEBase):
                 pass
             else:
                 raise ValueError(f"ONDEValue: Cannot understand value type {value.__class__.__name__:s}")
+            self.value=value
             del kwargs["value"]
             pass
         super().__init__(_orig, **kwargs)
@@ -965,7 +998,7 @@ class ONDEAccessoryClass(object):
 
     classname = None # Name of the accessory class
     attributes = None # Dictionary by name of ONDEField references
-    comments = None # Comments about thhis class (sourced from the .csv file)
+    comments = None # Comments about this class (sourced from the .csv file)
 
     def __init__(self):
         self.attributes = collections.OrderedDict()
@@ -1259,7 +1292,7 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
         
         graph_replace_node__walk(starting_path, starting_obj, starting_parent, scope, scope_nodes, trans)
         pass
-    #print("scope_nodes=",scope_nodes)
+    print("scope_nodes=",scope_nodes)
 
         
     #
@@ -1386,11 +1419,12 @@ class ONDEProxy(object):
         return cls(_graph=graph, _path=path, _snap=snapshot)
     
     @classmethod
-    def new_from_transaction(cls, transaction):
-        _graph = transaction.graph
+    def new_from_scope(cls, scope):
+        _trans = scope.trans
+        _graph = _trans.graph
         _path = ONDEPath()
 
-        return cls(_graph=_graph, _path=_path, _trans=transaction)
+        return cls(_graph=_graph, _path=_path, _trans=_trans,_scope=scope)
     
     def _get_obj(self):
         trans = object.__getattribute__(self, "_trans")
@@ -1400,7 +1434,8 @@ class ONDEProxy(object):
             pass
 
         else:
-            snap = trans.graph._latest_snap
+            graph = object.__getattribute__(self, "_graph")
+            snap = graph._latest_snap
             pass
 
         _path = object.__getattribute__(self, "_path")
@@ -1408,7 +1443,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr", "_get_attr","_get_obj","__class__","__dict__"}:
+            if name in { "_set_attr", "_get_attr","_get_obj","_follow_path","__class__","__dict__"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -1443,8 +1478,10 @@ class ONDEProxy(object):
             # to do: need to add include and exclude scopes
             transaction = ONDETransaction(_graph)
 
-            with transaction as proxy:
+            with transaction as scope:
+                proxy=scope.graph
                 # to do: proxy now has a potentially updated snapshot that we
+                
                 # should  use for the transaction. Need to use our path to
                 # recreate our object and then call _set_attr on that.
                 path = object.__getattribute__(self,"_path")
@@ -1468,8 +1505,9 @@ class ONDEProxy(object):
                 scope = _trans.scope
                 pass
 
-            if scope is None:
-                scope = ONDEOpScope([path])
+            if scope.include_paths is None:
+                # Null scope: use most constrained scope for each op
+                scope = ONDEOpScope(_trans,[path])
                 pass
 
             # if obj._frozen:
@@ -1496,6 +1534,20 @@ class ONDEProxy(object):
 
         pass
 
+    def _follow_path(self,path):
+        obj = self._get_obj()
+        dest=obj._follow_path(path)
+
+
+        _graph = object.__getattribute__(self, "_graph")
+
+        _our_path = object.__getattribute__(self, "_path")
+        full_path = ONDEPath(_our_path + path)
+
+        _trans = object.__getattribute__(self, "_trans")
+
+        return self.__class__(_graph=_graph, _path=full_path, _trans=_trans)
+        
     pass
 
 

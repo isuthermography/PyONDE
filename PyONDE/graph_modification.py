@@ -17,7 +17,7 @@ graph = onde.ONDEGraph(snapshot)
 with onde.ONDETransaction(graph) as tr:
     #import pdb
     #pdb.set_trace()
-    tr.obj.leaf2.value = 5.0
+    tr.graph.obj.leaf2.value = 5.0
     pass
 
-graph.obj.leaf.value=7.0
+graph.obj.leaf.value = 7.0
