@@ -61,7 +61,7 @@ class TwoWayDictionary(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_set_attr", "_get_attr"}:
+            if name in {"_freeze", "_frozen", "_set_attr", "_get_attr", "_keys"}:
                 return object.__getattribute__(self, name)
             raise IndexError("TwoWayDictionary: Indexes are not allowed to have leading underscores")
 
@@ -119,6 +119,11 @@ class TwoWayDictionary(object):
     def _freeze(self):
         object.__setattr__(self, "_frozen", True)
         pass
+
+    def _keys(self):
+        _bystrings = object.__getattribute__(self, "_bystrings")
+        return _bystrings.keys()
+
     pass
 
 class TwoWayArray(object):
@@ -795,7 +800,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -876,7 +881,7 @@ class ONDEObject(ONDEBase):
     
     def _list_edges(self):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
-        edgelist= list(_ONDE_attrs.keys())
+        edgelist= list(_ONDE_attrs._keys())
         return edgelist
 
     def _indices_for_object(self,obj):
@@ -1198,7 +1203,7 @@ def graph_replace_node__walk(starting_path, starting_obj,referring_obj, scope, s
             if current_path in scope.exclude_paths:
                 continue
 
-            if current_obj in scope.exclude_objs:
+            if current_obj in scope.exclude_objects:
                 continue
         
             graph_replace_node__walk(current_path, current_obj, starting_obj,scope, scope_nodes, trans)
@@ -1292,7 +1297,8 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
         
         graph_replace_node__walk(starting_path, starting_obj, starting_parent, scope, scope_nodes, trans)
         pass
-    print("scope_nodes=",scope_nodes)
+
+    # print("scope_nodes=",scope_nodes)
 
         
     #
