@@ -225,6 +225,7 @@ class ONDEGraph(object):
     _lock = None # threading.Lock that protects access to replace the snapshot.
     _lock_ownerthread = None # Writes protected by _lock, the threading.get_ident() of whichever thread owns the lock
     _latest_snap = None # class ONDEGraphSnapshot
+    _class_defs = None # ONDEClassDefinitions, optional
 
     def __init__(self, snapshot = None):
         # self._lock = threading.Lock()
@@ -243,7 +244,7 @@ class ONDEGraph(object):
     def __getattribute__(self, name):
         if name.startswith("_"):
             
-            if name in {"_set_attr", "_get_attr","__dict__","__dir__","_latest_snap","_lock"}:
+            if name in {"_set_attr", "_get_attr","__dict__","__dir__","_latest_snap","_lock", "_class_defs"}:
                 return object.__getattribute__(self, name)
             pass
         
@@ -1025,13 +1026,47 @@ class ONDEClass(object):
     pass
 
 class ONDEClassInstanceWrapper(object):
-    """Represents an ONDEObject that is an instance of a known class. References the underlying ONDEObject and the class definition."""
+    """Represents an ONDEObject that is an instance of a known class. References the proxy to the underlying ONDEObject and the class definition."""
+
+    # only _proxy OR _obj can ever be set
+    _proxy = None # an ONDEProxy for the ONDEObject instance
+    _obj = None # an ONDEObject instace
+    # _our_class = None # the ONDEClass instance
+    
+    def __init__(self, **kwargs):
+        # _dict = object.__getattribute__(self, "__dict__")
+
+        for arg in kwargs:
+            if arg in type(self).__dict__:
+                # setattr(self, arg, kwargs[arg])
+                object.__setattr__(self, arg, kwargs[arg])
+
+                pass
+            else:
+                raise ValueError(f"ONDEClassInstanceWrapper; unknown attribute {arg:s}")
+            pass
+        pass
+
+    @classmethod
+    def new(cls, proxy):
+        return cls(_proxy=proxy)
+
+    @classmethod
+    def new_obj(cls, graph, onde_classname, **kwargs):
+        if graph._class_defs is None:
+            raise ValueError("Graph does not have class definitions loaded")
+        
+        onde_class = graph._class_defs.classes[onde_classname]
+        obj = ONDEObject.new(_ONDE_type=onde_class.class_derivation, **kwargs)
+        # proxy = ONDEProxy(_path=None)
+
+        return cls(_obj=obj)
 
     pass
 
 class ONDEClassDefinitions(object):
     """Represents the set of class definitions from the ONDE .csv file."""
-    classes = None # Dictionary by name of classes
+    classes = None # Dictionary by name of ONDEClass
     acc_classes = None # Dictionary by name of accessory classes
     file_type = None # From the size_or_content of the blank ONDE:TYPE entry at the top of the csv file
     
