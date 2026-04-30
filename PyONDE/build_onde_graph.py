@@ -1,5 +1,8 @@
 import onde
 
+import os
+
+class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "ONDE_fields", "ONDE_fields.csv")
 
 leaf = onde.ONDEValue.new("leaf value", _frozen = True)
 leaf2 = onde.ONDEValue.new("leaf value 2", _frozen = True)
@@ -11,4 +14,4 @@ obj.array = array
 obj._freeze()
 
 snapshot = onde.ONDEGraphSnapshot.new(obj = obj, _frozen = True)
-graph = onde.ONDEGraph.new(None,snapshot)
+graph = onde.ONDEGraph.new(class_def_csv_path,snapshot)

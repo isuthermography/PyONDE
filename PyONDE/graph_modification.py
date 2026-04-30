@@ -14,7 +14,7 @@ obj.array = array
 obj._freeze()
 
 snapshot = onde.ONDEGraphSnapshot.new(obj = obj, _frozen = True)
-graph = onde.ONDEGraph(snapshot)
+graph = onde.ONDEGraph.new(None,snapshot)
 
 
 with onde.ONDETransaction(graph) as tr:
