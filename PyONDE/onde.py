@@ -1181,12 +1181,13 @@ class ONDEClass(object):
     classname = None
     class_derivation = None # tuple of strings starting with base class and ending with this current class
     superclass = None # Reference the ONDEClass object for our superclass, or None
-    type_tags = None # Dictionary by name of (truth value for mandatory, ONDEAccessoryClass object)
+    type_tags = None # Dictionary by name of truth value for mandatory
     attributes = None # Dictionary by name of ONDEField references
     comments = None # Comments about thhis class (sourced from the .csv file)
 
     def __init__(self):
         self.attributes = collections.OrderedDict()
+        self.type_tags = collections.OrderedDict()
         pass
     pass
 
@@ -1402,7 +1403,7 @@ class ONDEClassInstanceWrapper(object):
         
         classdefs = _graph._class_defs
         if classdefs is not None:
-           
+
             if isinstance(obj, ONDEObject):
                 fields +=  tuple(classdefs.get_fields_dict(obj).keys())
                 pass
@@ -1711,6 +1712,18 @@ class ONDEClassDefinitions(object):
                     assert(acc_classes[0] == classname)
 
                     class_defs.acc_classes[classname] = newclass
+
+                    pass
+
+                elif name == "ONDE:TYPE_TAGS":
+                    # specification for a class having a particular accessory class
+
+                    type_tags = ast.literal_eval(size_or_content)
+
+                    for type_tag in type_tags:
+                        class_defs.classes[classname].type_tags[type_tag] = mandatory_optional == "M"
+
+                        pass
 
                     pass
 
