@@ -81,6 +81,12 @@ class TwoWayDictionary(object):
 
         pass
 
+    def __setitem__(self,name,value):
+        _set_attr = object.__getattribute__(self, "_set_attr")
+        _set_attr(name, value)
+
+        pass
+
     def _set_attr(self, name, value):
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
@@ -116,6 +122,10 @@ class TwoWayDictionary(object):
         _bystrings = object.__getattribute__(self, "_bystrings")
         return _bystrings[name]
 
+    def __getitem__(self,name):
+
+        return self._get_attr(name)
+    
     def _freeze(self):
         object.__setattr__(self, "_frozen", True)
         pass
@@ -250,12 +260,27 @@ class ONDEGraph(object):
                 return object.__getattribute__(self, name)
             pass
         
-        _get_attr = object.__getattribute__(self, "_get_attr")
-        return _get_attr(name)
+        _latest_snap = object.__getattribute__(self, "_latest_snap")
+        
+        # call ONDEProxy
+        
+        snap_proxy = ONDEProxy.new_from_snapshot(self, _latest_snap)
+        obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, name)
+
+        if self._class_defs is not None:
+            return ONDEClassInstanceWrapper.new(obj_proxy)
+        return obj_proxy
     
     def __setattr__(self, name, value):
-        _set_attr = object.__getattribute__(self, "_set_attr")
-        _set_attr(name, value)
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+        
+        _latest_snap = object.__getattribute__(self, "_latest_snap")
+
+        snap_proxy = ONDEProxy.new_from_snapshot(self, _latest_snap)
+
+        snap_proxy._set_attr(name,value)
+
         pass
 
     def _get_attr(self, name):
@@ -268,22 +293,47 @@ class ONDEGraph(object):
         
         snap_proxy = ONDEProxy.new_from_snapshot(self, _latest_snap)
         obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, name)
+        if self._class_defs is not None:
+            return ONDEClassInstanceWrapper.new(obj_proxy)
 
         return obj_proxy # _latest_snap._get_attr(name)
     
-    # def _set_attr(self, name, value):
-    #     if name.startswith("_"):
-    #         raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+    def _set_attr(self, name, value):
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
 
-    #     _latest_snap = object.__getattribute__(self, "_latest_snap")
+        _latest_snap = object.__getattribute__(self, "_latest_snap")
+        snap_proxy._set_attr(name,value)
+
+        pass
+
+    def _get_item(self, index):
+        # Strictly shouldn't be necessary unless we shift to indexing the snapshot with numbers rather than strings
+        _latest_snap = object.__getattribute__(self, "_latest_snap")
         
-    #     return _latest_snap._get_attr(name)
+        # call ONDEProxy
+        
+        snap_proxy = ONDEProxy.new_from_snapshot(self, _latest_snap)
+        obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, index)
+        if self._class_defs is not None:
+            return ONDEClassInstanceWrapper.new(obj_proxy)
 
+        return obj_proxy # _latest_snap._get_attr(name)
     
+    def _set_item(self, index, value):
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _latest_snap = object.__getattribute__(self, "_latest_snap")
+        
+        _latest_snap._set_item(index,value)
+        pass
+
+   
     def new_obj(self,onde_classname,**kwargs):
         if self._class_defs is not None:
             return ONDEClassInstanceWrapper.new_obj(self,onde_classname,**kwargs)
-        return ONDEObject.new(_ONDE_type = onde_classname,_ONDE_attrs=None,**kwargs)
+        return ONDEObject.new(ONDE_TYPE = onde_classname,_ONDE_attrs=None,**kwargs)
 
     @classmethod
     def new(cls,class_def_csv_path=None,snapshot=None):
@@ -669,10 +719,14 @@ class ONDEArray(ONDEBase):
         pass
    
     def __getitem__(self,index):
-        return self._get_item(index)
+        return self.value[index]
 
     def __setitem__(self,index,el_value):
-        return self._set_item(index)
+        if self._frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+
+        self.value[index] = el_value
+        pass
 
     def _get_data(self, name):
         """
@@ -695,25 +749,7 @@ class ONDEArray(ONDEBase):
             return object.__setattr__(self, name, value)
 
         raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
-
-    # Items are indexed ONDEBase that we can access
-    def _get_item(self,index):
-        """Return the indexed data element of an ONDE object.
-        """
-        return self.value[index]
     
-        
-    
-    def _set_item(self,index,value):
-        """Set the indexed data element of an ONDE object.
-        """
-        if self._frozen:
-            raise RuntimeError("Attempting to modify an object that is already frozen")
-
-        self.value[index] = el_value
-        pass
-        
-
     def _freeze(self):
         self.value.flags.writeable = False
         super()._freeze()
@@ -875,7 +911,7 @@ class ONDEReferenceArray(ONDEBase):
 class ONDEObject(ONDEBase):
     """ONDEObject represents a (non-leaf) node in the graph
     that can point at other objects."""
-    _ONDE_type = None # List of classes starting with base class
+    #ONDE_TYPE = None # List of classes starting with base class
     _ONDE_attrs = None # TwoWayDictionary by name of attributes that should be ONDEBase (or subclass) objects
 
     def __init__(self, _orig, **kwargs):
@@ -883,14 +919,14 @@ class ONDEObject(ONDEBase):
         Use .new() classmethod or copy.copy()
         """
         
-        _ONDE_type = None
-        if _orig is not None:
-            _ONDE_type = object.__getattribute__(_orig, "_ONDE_type")
-            pass
-        if "_ONDE_type" in kwargs:
-            _ONDE_type = kwargs["_ONDE_type"]
-            del kwargs["_ONDE_type"]
-            pass
+        #ONDE_TYPE = None
+        #if _orig is not None:
+        #    ONDE_TYPE = object.__getattribute__(_orig, "ONDE_TYPE")
+        #    pass
+        #if "ONDE_TYPE" in kwargs:
+        #    ONDE_TYPE = kwargs["ONDE_TYPE"]
+        #    del kwargs["ONDE_TYPE"]
+        #    pass
 
         _ONDE_attrs = None
         if _orig is not None:
@@ -907,15 +943,29 @@ class ONDEObject(ONDEBase):
             pass
         
         
-        object.__setattr__(self, "_ONDE_type", list(_ONDE_type))
+        #object.__setattr__(self, "ONDE_TYPE", tuple(ONDE_TYPE))
         ONDE_attrs = TwoWayDictionary(_ONDE_attrs)
+        if not "ONDE_TYPE" in ONDE_attrs:
+            ONDE_attrs["ONDE_TYPE"] = ()
+            pass
+        
         object.__setattr__(self, "_ONDE_attrs", ONDE_attrs)
-        super().__init__(_orig, **kwargs)
+
+        base_kwargs = {}
+        for kwarg in kwargs:
+            if kwarg.startswith("_"):
+                base_kwargs[kwarg] = kwargs[kwarg]
+                pass
+            else:
+                ONDE_attrs._set_attr(kwarg,kwargs[kwarg])
+                pass
+            pass
+        super().__init__(_orig, **base_kwargs)
         pass
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1005,25 +1055,26 @@ class ONDEObject(ONDEBase):
         return _ONDE_attrs(obj) # __call__ method does reverse lookup to return a set of indices
     
     @classmethod
-    def new(cls, _ONDE_type = None, _ONDE_attrs = None, **kwargs):
+    def new(cls, ONDE_TYPE = None, _ONDE_attrs = None, **kwargs):
         """Main constructor to call"""
         constructargs = {}
-        if _ONDE_type is not None:
-            constructargs["_ONDE_type"] = _ONDE_type
+        if ONDE_TYPE is not None:
+            constructargs["ONDE_TYPE"] = ONDE_TYPE
             pass
         if _ONDE_attrs is not None:
             constructargs["_ONDE_attrs"] = _ONDE_attrs
             pass
+        constructargs.update(kwargs)
         newobj = cls(None, **constructargs)
-        for attrname in kwargs:
-            setattr(newobj, attrname, kwargs[attrname])
-            pass
+        #for attrname in kwargs:
+        #    setattr(newobj, attrname, kwargs[attrname])
+        #    pass
         return newobj
     pass
 
 class ONDEGraphSnapshot(ONDEObject):
     """ Not allowed to be referenced by any other ONDEObject.
-    The _ONDE_type field should be empty.
+    The ONDE_TYPE field should be empty.
     Attributes represent entry points of the graph."""
     def __init__(self, _orig = None, **kwargs):
         super().__init__(_orig, **kwargs)
@@ -1034,7 +1085,7 @@ class ONDEGraphSnapshot(ONDEObject):
     #    if entry_points is None:
     #        entry_points = TwoWayDictionary()
     #        pass
-    #    return cls(None, _ONDE_type = [], _ONDE_attrs = entry_points)
+    #    return cls(None, ONDE_TYPE = [], _ONDE_attrs = entry_points)
     @classmethod
     def new(cls, **kwargs):
         _frozen = False
@@ -1042,7 +1093,7 @@ class ONDEGraphSnapshot(ONDEObject):
             _frozen = kwargs["_frozen"]
             del kwargs["_frozen"]
             pass
-        newobj = cls(None, _ONDE_type = [])
+        newobj = cls(None, ONDE_TYPE = ONDEArray.new([],_frozen = True))
         for attrname in kwargs:
             newobj._set_attr(attrname, kwargs[attrname])
             pass
@@ -1290,14 +1341,86 @@ class ONDEClassInstanceWrapper(object):
         pass
 
 
-
+    def __dir__(self):
+        if self._proxy is not None:
+            obj = self._proxy._get_obj()
+            pass
+        else:
+            obj = self._obj
+            pass
+        basic_fields = {
+            "ONDEValue":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_get_data",
+                "_set_attr",
+                "_set_data",
+                "value"
+                ),
+            "ONDEArray":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_get_data",
+                "_set_attr",
+                "_set_data",
+                "value"
+                ),
+            "ONDEReferenceArray":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_get_data",
+                "_get_item",
+                "_set_attr",
+                "_set_data",
+                "_set_item",
+                "refs"
+                ),
+            "ONDEObject":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_set_attr",
+                ),
+            "ONDEGraphSnapshot":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_set_attr",
+                )
+            }
+        
+        fields = basic_fields[obj.__class__.__name__]
+        if self._proxy is not None:
+            _graph = self._proxy._graph
+            pass
+        else:
+            _graph = self._graph
+            pass
+        
+        classdefs = _graph._class_defs
+        if classdefs is not None:
+           
+            if isinstance(obj, ONDEObject):
+                fields +=  tuple(classdefs.get_fields_dict(obj).keys())
+                pass
+            pass
+        
+                
+        return list(fields)
+    
     def __getattribute__(self,name):
         if name.startswith('_'):
             return object.__getattribute__(self,name)
         if self._proxy is not None:
             value = getattr(self._proxy,name)
             if isinstance(value,ONDEProxy):
-                return self.__class__.new(value)
+                obj=value._get_obj()
+                if isinstance(value, ONDEObject) or isinstance(value, ONDEReferenceArray):
+                    return self.__class__.new(value)
+                pass
             return value
         if self._obj is not None:
             value = getattr(self._obj,name)
@@ -1374,7 +1497,7 @@ class ONDEClassInstanceWrapper(object):
             raise ValueError("Graph does not have class definitions loaded")
         
         onde_class = graph._class_defs.classes[onde_classname]
-        obj = ONDEObject.new(_ONDE_type=onde_class.class_derivation, **kwargs)
+        obj = ONDEObject.new(ONDE_TYPE=onde_class.class_derivation, **kwargs)
         # proxy = ONDEProxy(_path=None)
 
         return cls(_graph=graph,_obj=obj)
@@ -1384,7 +1507,7 @@ class ONDEClassInstanceWrapper(object):
         if not isinstance(obj,ONDEBase):
             raise ValueError(f"Given object is of type {obj.__class__.__name__:s} and is not an ONDEBase instance")
 
-        # onde_classname = object.__getattribute__(_orig, "_ONDE_type")
+        # onde_classname = object.__getattribute__(_orig, "ONDE_TYPE")
         if graph._class_defs is None:
             raise ValueError("Graph does not have class definitions loaded")
         return cls(_graph=graph,_obj=obj)
@@ -1393,15 +1516,118 @@ class ONDEClassInstanceWrapper(object):
 
 class ONDEClassDefinitions(object):
     """Represents the set of class definitions from the ONDE .csv file."""
+    #NOTE: Immutable once constructed, except for field cache
     classes = None # Dictionary by name of ONDEClass
     acc_classes = None # Dictionary by name of accessory classes
     file_type = None # From the size_or_content of the blank ONDE:TYPE entry at the top of the csv file
+
+    field_cache = None #dictionary by (tuple_of_class_derivation, frozen_set_of_accessory_classes) of a dictionary by field names and field name abbreviations of ONDEField objects
     
     def __init__(self):
         self.classes = collections.OrderedDict()
         self.acc_classes = collections.OrderedDict()
+        self.field_cache = {}
         pass
+    
+    def get_fields_dict(self,obj):
+        onde_type_value = obj._ONDE_attrs["ONDE_TYPE"]
+        assert(isinstance(onde_type_value,ONDEArray))
+        
+        class_derivation = tuple([str(classname) for classname in onde_type_value.value])
+        
+        if "ONDE:TYPE_TAGS" in obj._ONDE_attrs:
+            acc_class_value = obj._ONDE_attrs["ONDE:TYPE_TAGS"]
+            assert(isinstance(acc_class_value,ONDEArray))
+            type_tags = frozenset([str(type_tag) for typ_tag in acc_class_value.value])
+            pass
+        else:
+            type_tags = frozenset()
+            pass
 
+        field_cache_key = (class_derivation, type_tags)
+
+        if field_cache_key in self.field_cache:
+            return self.field_cache[field_cache_key]
+
+        fields_dict = {}
+        derivation_index=0
+        mandatory_acc_classes = set()
+
+        
+        def add_field(fieldname,field,extra_keys):
+            fields_dict[fieldname]=field.attributes[fieldname]
+            for key in extra_keys:
+                if key in fields_dict:
+                    # key already present
+                    if fields_dict[key].class_prefix==fields_dict[fieldname].class_prefix and fields_dict[key].name==fields_dict[fieldname].key:
+                        # Override of a shorthand for the same thing already present. This is allowable.
+                        fields_dict[key]=fields_dict[fieldname]
+                        pass
+                    else:
+                        # Conflicting shorthands. Remove pre-existing entry.
+                        del fields_dict[key]
+                        pass
+                    pass
+                pass
+            pass
+
+        for classname in ("ONDE",)+class_derivation:
+            # from base class to most derived
+            derivation_index+=1
+            
+            if not classname in self.classes:
+                continue
+
+            if class_derivation[:(derivation_index-1)] != self.classes[classname].class_derivation:
+                print(f"Object class derivation mismatch: {class_derivation[:(derivation_index-1)]}  from object definition versus {self.classes[classname].class_derivation}  from class definition.",file=sys.stderr)
+                break
+                
+
+            # Gather fields from this class
+            for fieldname in self.classes[classname].attributes:
+                extra_keys=set()
+                if ':' in fieldname:
+                    #Shorthand for field name by admitting colon
+                    extra_keys.add(fieldname[(fieldname.index(':')+1):])
+                    pass
+
+                add_field(fieldname,self.classes[classname],extra_keys)
+                pass
+
+            # Gather mandatory accessory classes
+            for acc_class_name in self.classes[classname].type_tags:
+                if self.classes[classname].type_tags[acc_class_name]:
+                    # This accessory class is mandatory
+                    mandatory_acc_classes.add(acc_class_name)
+                    pass
+                pass
+            pass
+
+        acc_classes = type_tags | mandatory_acc_classes # Set union
+        
+        for acc_class_name in acc_classes:
+            
+            # Gather fields from accessory classes
+            acc_class = self.acc_classes[acc_class_name]
+
+            # Gather fields from this accessory class
+            for fieldname in self.classes[classname].attributes:
+                extra_keys=set()
+                if ':' in fieldname:
+                    #Shorthand for field name by admitting colon
+                    extra_keys.add(fieldname[(fieldname.index(':')+1):])
+                    pass
+
+                add_field(fieldname,acc_class.attributes[fieldname],extra_keys)
+                pass
+            pass
+        
+
+        
+        self.field_cache[field_cache_key] = fields_dict
+        return fields_dict
+
+    
     @classmethod
     def load_from_csv(cls, filename):
         class_defs = ONDEClassDefinitions()
@@ -1811,7 +2037,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr", "_get_attr","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__"}:
+            if name in { "_set_attr", "_get_attr","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
