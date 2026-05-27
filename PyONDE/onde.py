@@ -13,6 +13,55 @@ from dataclasses import dataclass, field
 from typing import Optional, Any
 import numpy as np
 
+onde_basic_fields = {
+            "ONDEValue":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_get_data",
+                "_set_attr",
+                "_set_data",
+                "_has_attr",
+                "value"
+                ),
+            "ONDEArray":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_get_data",
+                "_set_attr",
+                "_set_data",
+                "_has_attr",
+                "value"
+                ),
+            "ONDEReferenceArray":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_get_data",
+                "_get_item",
+                "_set_attr",
+                "_set_data",
+                "_set_item",
+                "_has_attr",
+                "refs"
+                ),
+            "ONDEObject":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_set_attr",
+                "_has_attr",
+                ),
+            "ONDEGraphSnapshot":(
+                "_freeze",
+                "_frozen",
+                "_get_attr",
+                "_set_attr",
+                "_has_attr",
+                )
+            }
+        
 class TwoWayDictionary(object):
     """A dictionary that is indexable by strings using
     getattr() or dot notation to get objects. Can be
@@ -268,7 +317,7 @@ class ONDEGraph(object):
         obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, name)
 
         if self._class_defs is not None:
-            return ONDEClassInstanceWrapper.new(obj_proxy)
+            return ONDEClassInstanceWrapper.new_from_proxy(obj_proxy)
         return obj_proxy
     
     def __setattr__(self, name, value):
@@ -501,6 +550,13 @@ class ONDEBase(object):
         """
 
         raise ValueError("ONDEBase does not have attributes")
+
+    def _has_attr(self, name):
+        """
+        Return whether the named conceptual attribute of an ONDE object exists.
+        """
+
+        return False
     
     def _set_attr(self, name, value):
         """
@@ -965,7 +1021,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs", "_has_attr"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -994,6 +1050,15 @@ class ONDEObject(ONDEBase):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
 
         return _ONDE_attrs._get_attr(name)
+
+    def _has_attr(self, name):
+        """
+        Return whether the named conceptual attribute of an ONDE object exists.
+        """
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        if name in _ONDE_attrs:
+            return True
+        return False
     
     def _set_attr(self, name, value):
         """
@@ -1214,24 +1279,55 @@ class ONDEClassInstanceWrapper(object):
             pass
         pass
 
+    def _full_fieldname_from_attrname(self, _graph, obj, attrname):
+        #_graph = object.__getattribute__(self,"_graph")
+        if attrname in onde_basic_fields[obj.__class__.__name__]:
+            return attrname
+        
+        if isinstance(obj,ONDEObject):
+            classdefs = _graph._class_defs
+            field_dict = classdefs.get_fields_dict(obj)
+            if attrname in field_dict:
+                field = field_dict[attrname]
+                full_name = field.class_prefix + ":" + field.name
+                return full_name
+            else:
+                raise NameError(f"Unknown attribute {attrname:s} on ONDEObject of type {obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s}.")
+            pass
+        return attrname
+            
     def _get_attr_or_item(self,get_method_name,key):
 
         _proxy = object.__getattribute__(self,"_proxy")
         _obj = object.__getattribute__(self,"_obj")
+        _graph = object.__getattribute__(self,"_graph")
 
         if _proxy is not None:
+            _obj = _proxy._get_obj()
+            _graph = _proxy._graph
+            pass
+        
+        full_name = key
+        if get_method_name == "_get_attr":
+            full_name = self._full_fieldname_from_attrname(_graph, _obj, key)
+            if not _obj._has_attr(full_name):
+                return None
+            
+            pass
+        
+        if _proxy is not None:
             get_method = getattr(_proxy,get_method_name)
-            value = get_method(key) # e.g. _proxy._get_attr(key)
+            value = get_method(full_name) # e.g. _proxy._get_attr(key)
             if isinstance(value,ONDEProxy):
                 value_obj = value._get_obj()
                 if isinstance(value_obj,ONDEObject) or isinstance(value_obj,ONDEReferenceArray):
-                    return self.__class__.new(value)
+                    return self.__class__.new_from_proxy(value)
                 return value
             return value
         else:
-            _graph = object.__getattribute__(self,"_graph")
+          
             get_method = getattr(_obj,get_method_name)
-            value = get_method(key) # e.g. _obj._get_attr(name)
+            value = get_method(full_name) # e.g. _obj._get_attr(name)
 
             if isinstance(value,ONDEObject) or isinstance(value,ONDEReferenceArray):
                 
@@ -1246,51 +1342,65 @@ class ONDEClassInstanceWrapper(object):
     def _get_attr(self,name):
         return self._get_attr_or_item("_get_attr",name)
             
-    def _set_attr_or_item(self,set_method_name,name,value):
+    def _set_attr_or_item(self,set_method_name,key,value):
+        our_proxy = object.__getattribute__(self,"_proxy")
+        our_obj = object.__getattribute__(self,"_obj")
+        _graph = object.__getattribute__(self,"_graph")
+
+        if our_proxy is not None:
+            our_obj = our_proxy._get_obj()
+            _graph = our_proxy._graph
+            pass
+        
+        full_name = key
+        if set_method_name == "_set_attr":
+            full_name = self._full_fieldname_from_attrname(_graph, our_obj, key)       
+            pass
+        
         if isinstance(value,ONDEClassInstanceWrapper):
-            _proxy = object.__getattribute__(value,"_proxy")
-            _obj = object.__getattribute__(value,"_obj")
-            if self._proxy is not None and _proxy is not None:
-                set_method = getattr(self._proxy,set_method_name)
-                set_method(key,_proxy) # self._proxy._set_attr(key,_proxy)
+            target_proxy = object.__getattribute__(value,"_proxy")
+            target_obj = object.__getattribute__(value,"_obj")
+            if our_proxy is not None and target_proxy is not None:
+                set_method = getattr(our_proxy,set_method_name)
+                set_method(full_name,_proxy) # self._proxy._set_attr(key,_proxy)
                 pass
             elif self._proxy is not None and _obj is not None:
                 set_method = getattr(self._proxy,set_method_name)
-                set_method(key,_obj)
+                set_method(full_name,_obj)
                 pass
             elif self._obj is not None and _proxy is not None:
                 set_method = getattr(self._obj,set_method_name)
-                set_method(key,_proxy._get_obj()) # e.g. self._obj._set_attr(key,_proxy._get_obj())
+                set_method(full_name,_proxy._get_obj()) # e.g. self._obj._set_attr(key,_proxy._get_obj())
                 pass
             elif self._obj is not None and _obj is not None:
                 set_method = getattr(self._obj,set_method_name)
-                set_method(key,_obj)
+                set_method(full_name,_obj)
                 pass
             else:
                 assert(False) # Exactly one of _obj and _proxy should be valid
                 pass
             pass
         elif isinstance(value,ONDEProxy):
-            if self._proxy is not None:
-                set_method = getattr(self._proxy,set_method_name)
-                set_method(key,value)
+            if our_proxy is not None:
+                set_method = getattr(our_proxy,set_method_name)
+                set_method(full_name,value)
                 pass
-            elif self._obj is not None:
-                set_method = getattr(self._obj,set_method_name)
-                set_method(key,value._get_obj())
+            elif our_obj is not None:
+                set_method = getattr(our_obj,set_method_name)
+                set_method(full_name,value._get_obj())
                 pass
             else:
                 assert(False)
                 pass
             pass
         elif isinstance(value,ONDEBase):
-            if self._proxy is not None:
-                set_method = getattr(self._proxy,set_method_name)
-                set_method(key,value)
+            if our_proxy is not None:
+                set_method = getattr(our_proxy,set_method_name)
+                set_method(full_name,value)
                 pass
-            elif self._obj is not None:
-                set_method = getattr(self._obj,set_method_name)
-                set_method(key,value)
+            elif our_obj is not None:
+                set_method = getattr(our_obj,set_method_name)
+                set_method(full_name,value)
                 pass
             else:
                 assert(False)
@@ -1349,51 +1459,8 @@ class ONDEClassInstanceWrapper(object):
         else:
             obj = self._obj
             pass
-        basic_fields = {
-            "ONDEValue":(
-                "_freeze",
-                "_frozen",
-                "_get_attr",
-                "_get_data",
-                "_set_attr",
-                "_set_data",
-                "value"
-                ),
-            "ONDEArray":(
-                "_freeze",
-                "_frozen",
-                "_get_attr",
-                "_get_data",
-                "_set_attr",
-                "_set_data",
-                "value"
-                ),
-            "ONDEReferenceArray":(
-                "_freeze",
-                "_frozen",
-                "_get_attr",
-                "_get_data",
-                "_get_item",
-                "_set_attr",
-                "_set_data",
-                "_set_item",
-                "refs"
-                ),
-            "ONDEObject":(
-                "_freeze",
-                "_frozen",
-                "_get_attr",
-                "_set_attr",
-                ),
-            "ONDEGraphSnapshot":(
-                "_freeze",
-                "_frozen",
-                "_get_attr",
-                "_set_attr",
-                )
-            }
-        
-        fields = basic_fields[obj.__class__.__name__]
+     
+        fields = onde_basic_fields[obj.__class__.__name__]
         if self._proxy is not None:
             _graph = self._proxy._graph
             pass
@@ -1415,25 +1482,68 @@ class ONDEClassInstanceWrapper(object):
     def __getattribute__(self,name):
         if name.startswith('_'):
             return object.__getattribute__(self,name)
+        
+        return self._get_attr_or_item("_get_attr",name)
+    obsolete = r"""
         if self._proxy is not None:
-            value = getattr(self._proxy,name)
-            if isinstance(value,ONDEProxy):
-                obj=value._get_obj()
-                if isinstance(value, ONDEObject) or isinstance(value, ONDEReferenceArray):
-                    return self.__class__.new(value)
+            obj = self._proxy._get_obj()
+            _graph = self._proxy._graph
+            pass
+        else:
+            obj = self._obj
+            _graph = self._graph
+            pass
+
+        field_dict = {}
+        if isinstance(obj,ONDEObject):
+            classdefs = _graph._class_defs
+            field_dict = classdefs.get_fields_dict(obj)
+            if name in field_dict:
+                field = field_dict[name]
+                full_name = field.class_prefix + ":" + field.name
+                value = obj._ONDE_attrs[full_name]
+                if self._proxy is not None:
+                    valueproxy = _proxy._get_attr(full_name)
+                    if isinstance(value,ONDEObject) or isinstance(value,ONDEReferenceArray):
+                        return self.__class__.new_from_proxy(valueproxy)
+                    else:
+                        return valueproxy
+                    pass
+                else:
+                    if isinstance(value,ONDEObject) or isinstance(value,ONDEReferenceArray):
+                        return self.__class__.new_from_obj(self._graph, value)
+                    else:
+                        return value
+                    pass
                 pass
-            return value
-        if self._obj is not None:
-            value = getattr(self._obj,name)
-            if isinstance(value, ONDEObject) or isinstance(value, ONDEReferenceArray):
-                return self.__class__.new_from_obj(self._graph, value)
-            return value
+            pass
+        else:
+            assert(isinstance(obj, ONDEReferenceArray))
+            value = obj._get_attr(name)
+            
+            if self._proxy is not None:
+                valueproxy = _proxy._get_attr(name)
+                if isinstance(value,ONDEObject) or isinstance(value,ONDEReferenceArray):
+                    return self.__class__.new_from_proxy(valueproxy)
+                else:
+                    return valueproxy
+                pass
+            else:
+                if isinstance(value,ONDEObject) or isinstance(value,ONDEReferenceArray):
+                    return self.__class__.new_from_obj(self._graph, value)
+                else:
+                    return value
+                pass
+            pass
         assert(False)
         pass
-
+"""
     def __setattr__(self,name,value):
         if name.startswith('_'):
             raise ValueError('Cannot assign attribute with leading underscore')
+        self._set_attr_or_item("_set_attr",name,value)
+        return
+    obsolete = r"""
         if self._proxy is not None:
             if isinstance(value, ONDEClassInstanceWrapper):
                 _proxy = value._proxy
@@ -1480,13 +1590,13 @@ class ONDEClassInstanceWrapper(object):
             pass
         pass
                 
-                
+"""                
         
             
             
     
     @classmethod
-    def new(cls, proxy):
+    def new_from_proxy(cls, proxy):
         obj = proxy._get_obj()
         if not isinstance(obj,ONDEObject) and not isinstance(obj,ONDEReferenceArray):
             raise ValueError(f"ONDEClassInstanceWrapper only wraps non-leaf nodes, not {obj.__class__.__name__}")
@@ -2094,7 +2204,12 @@ class ONDEProxy(object):
         return self.__class__.new_from_proxy(self, name)
 
         #return attr_obj
+        
+    def _has_attr(self, name):
+        obj = self._get_obj()
+        return obj._has_attr(name)
 
+    
     def _set_attr(self, name, value):
         self._set_attr_or_item_or_data('_set_attr', name, value)
         pass
