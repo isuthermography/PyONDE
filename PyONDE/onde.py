@@ -1235,6 +1235,8 @@ class ONDEField(object):
     content_class_string = None # Referenced type
     dimensionality_string = None # Dimensionality field from .csv
     size_or_content_string = None # Value field from .csv
+    min_val_string = None # Min field from .csv
+    max_val_string = None # Max field from .csv
 
     def __init__(self, **kwargs):
         for arg in kwargs:
@@ -1248,7 +1250,7 @@ class ONDEField(object):
 
     @classmethod
     def from_csv_line(cls, row, class_derivation):
-        (classname, name, comments, mandatory_optional, dataset_attribute, content_class, dims, size_or_content) = row
+        (classname, name, comments, mandatory_optional, dataset_attribute, content_class, dims, size_or_content, min_val, max_val, accessory_class) = row
 
         name_split = name.split(":")
         class_prefix = name_split[0]
@@ -1279,7 +1281,9 @@ class ONDEField(object):
             storage=storage,
             content_class_string=content_class,
             dimensionality_string=dims,
-            size_or_content_string=size_or_content
+            size_or_content_string=size_or_content,
+            min_val_string = min_val,
+            max_val_string = max_val
         )
     pass
     
@@ -1821,8 +1825,8 @@ class ONDEClassDefinitions(object):
                     pass
 
                 stripped_row = [col.strip() for col in row]
-                (classname, name, comments, mandatory_optional, dataset_attribute, content_class, dims, size_or_content) = stripped_row
-
+                (classname, name, comments, mandatory_optional, dataset_attribute, content_class, dims, size_or_content, min_val, max_val, accessory_class) = stripped_row
+                
                 if classname == "Class":
                     # header csv line
                     continue
@@ -1831,8 +1835,21 @@ class ONDEClassDefinitions(object):
                     # to do: store version
                     continue
 
-                if name == "ONDE:TYPE":
-                    # class definition
+                if classname == "" and name == "ONDE:FILETYPE":
+                    # ignore filetype definition in .csv
+                    continue
+                
+                if accessory_class == "True":
+                    accessory_class = True
+                    pass
+                elif accessory_class == "False" or accessory_class == "":
+                    accessory_class = False
+                    pass
+                else:
+                    raise ValueError(f"unknown accessory_class value in .csv: {accessory_class:s}")
+                
+                if name == "ONDE:TYPE" and not accessory_class:
+                    # class definition 
                     if classname in class_defs.classes:
                         raise ValueError(f"Class {classname:s} multiply defined in {filename:s}")
                     newclass = ONDEClass()
@@ -1874,7 +1891,7 @@ class ONDEClassDefinitions(object):
                     class_defs.classes[classname] = newclass
                     pass
 
-                elif name == "ONDE:TYPE_TAGS" and classname not in class_defs.classes:
+                elif name == "ONDE:TYPE" and accessory_class:
                     # accessory class definition
 
                     if classname in class_defs.acc_classes:
