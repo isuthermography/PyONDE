@@ -61,6 +61,60 @@ onde_basic_fields = {
                 "_has_attr",
                 )
             }
+
+def onde_from_python(value):
+    if isinstance(value,numbers.Integral) or isinstance(value, numbers.Real) or isinstance(value,numbers.Complex) or  isinstance(value,str) or isinstance(value,np.str_):
+        return onde.ONDEValue.new(value)
+
+    if isinstance(value,collections.abc.Sequence):
+        subvalues = []
+        all_string = True
+        all_numeric = True
+        any_complex = False
+        all_object = True
+        for subvalue in value:
+            if isinstance(value,str) or isinstance(value,np.str_):
+                all_numeric = False
+                all_object = False
+                pass
+            elif isinstance(value,numbers.Real):
+                all_string = False
+                all_object = False
+                pass
+            elif isinstance(value,numbers.Complex):
+                all_string = False
+                any_complex = True
+                all_object = False
+                pass
+            elif isinstance(value,collections.abc.Sequence):
+                all_string = False
+                all_numeric = False
+                value = onde_from_python(value)
+                pass
+            else:
+                raise ValueError(f"Could not convert object of type {value.__class__.__name__:s} into an ONDE object")
+            
+            subvalues.append(value)
+            pass
+
+        if all_string and not(all_numeric) and not(all_object):
+            dtype = np.StringDType()
+            return ONDEArray.new(value = np.array(subvalues,dtype = dtype))
+        elif all_numeric and not(all_string) and not(all_object):
+            if any_complex:
+                dtype = "D"
+                pass
+            else:
+                dtype = "d"
+                pass
+            return ONDEArray.new(value = np.array(subvalues,dtype = dtype))
+            
+        elif all_object and not(all_string) and not(all_numeric):
+            return ONDEReferenceArray.new(refs = np.array(subvalues,dtype = "O"))
+        else:
+            raise ValueError(f"Could not identify unique type for converting python object {str(value):s} into an ONDE object")
+        pass
+    
         
 class TwoWayDictionary(object):
     """A dictionary that is indexable by strings using
@@ -656,7 +710,8 @@ class ONDEValue(ONDEBase):
             elif isinstance(value, numbers.Complex):
                 value = complex(value)
                 pass
-            elif isinstance(value, str):
+            elif isinstance(value, str) or isinstance(value,np.str_):
+                value = str(value)
                 pass
             else:
                 raise ValueError(f"ONDEValue: Cannot understand value type {value.__class__.__name__:s}")
@@ -1407,7 +1462,21 @@ class ONDEClassInstanceWrapper(object):
                 pass
             pass
         else:
-            raise ValueError(f"Attribute values should be ONDEBase or ONDEProxy or ONDEClassInstanceWrapper")
+            #raise ValueError(f"Attribute values should be ONDEBase or ONDEProxy or ONDEClassInstanceWrapper")
+            #build an object from python structures
+            target_obj = onde_from_python(value)
+            if our_proxy is not None:
+                set_method = getattr(our_proxy,set_method_name)
+                set_method(full_name,target_obj)
+                pass
+            elif our_obj is not None:
+                set_method = getattr(our_obj,set_method_name)
+                set_method(full_name,target_obj)
+                pass
+            else:
+                assert(False)
+                pass
+            pass
         pass
 
    
