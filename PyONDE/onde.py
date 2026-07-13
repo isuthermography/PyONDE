@@ -1,3 +1,11 @@
+# Road map:
+# * Onde base referencedby needs to be protected by a lock
+# * change onde graph to onde datasetfile graph, Onde graph snapshot to onde dataset file graph snapshot
+# * add onde datasetfile abstraction
+# * add onde file object abstraction representing a finalized ondebase object contained within a file, with references to the object as well as the hdf5 path within the file
+# * each ondebase object has a mutable set of onde file objects that reference it. 
+# * This set will need to be protected by a lock
+
 import h5py
 import sys
 import os
@@ -52,6 +60,7 @@ onde_basic_fields = {
                 "_get_attr",
                 "_set_attr",
                 "_has_attr",
+                "_list_attrs"
                 ),
             "ONDEGraphSnapshot":(
                 "_freeze",
@@ -59,8 +68,17 @@ onde_basic_fields = {
                 "_get_attr",
                 "_set_attr",
                 "_has_attr",
+                "_list_attrs"
                 )
             }
+
+def repr_helper(indentation, classname, **attrdict):
+    lines = []
+    lines.append(" "*indentation + classname)
+    for attrname in attrdict:
+        lines.append(" "*(indentation+2) + f"{attrname:>18s}: {attrdict[attrname]:s}")
+        pass
+    return "\n".join(lines)
 
 def onde_from_python(value):
     if isinstance(value,numbers.Integral) or isinstance(value, numbers.Real) or isinstance(value,numbers.Complex) or  isinstance(value,str) or isinstance(value,np.str_):
@@ -294,6 +312,9 @@ class TwoWayArray(object):
         
         return self._byindex[index]
 
+    @property
+    def _shape(self):
+        return self._byindex.shape
 
     def __call__(self, obj):
         objidx = self._byobjid[id(obj)]
@@ -680,7 +701,15 @@ class ONDEBase(object):
     def _indices_for_object(self,obj):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
         return frozenset()
+
+    def _repr_short(self, onde_class=None):
+        return type(self).__name__
     
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        return repr_helper(indentation, type(self).__name__, **extra_attrs)
+
+    def __repr__(self):
+        return object.__getattribute__(self, "_repr")(0)
     
     @classmethod
     def new(cls):
@@ -760,6 +789,17 @@ class ONDEValue(ONDEBase):
 
         raise ValueError("ONDEValue does not have data other than \"value\"")
 
+    def _repr_short(self, onde_class=None):
+        return f"ONDEValue({str(object.__getattribute__(self, 'value')):s})"
+    
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        # return f"ONDEValue ID={id(self):x} of type {type(object.__getattribute__(self, 'value')).__name__:s} containing value: {str(object.__getattribute__(self, 'value')):s}"
+        return repr_helper(indentation, "ONDEValue",
+                           ID=f"{id(self):x}",
+                           type=type(object.__getattribute__(self, 'value')).__name__,
+                           value=str(object.__getattribute__(self, 'value')),
+                           **extra_attrs)
+        
     @classmethod
     def new(cls, value = None, **kwargs):
         return cls(None, value = value, **kwargs)
@@ -866,6 +906,16 @@ class ONDEArray(ONDEBase):
         super()._freeze()
         pass
 
+    def _repr_short(self, onde_class=None):
+        return f"ONDEArray(shape={str(object.__getattribute__(self, 'value').shape):s},dtype={str(object.__getattribute__(self, 'value').dtype):s})"
+    
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        return repr_helper(indentation, "ONDEArray",
+                           ID=f"{id(self):x}",
+                           type=str(object.__getattribute__(self, 'value').dtype),
+                           shape=str(object.__getattribute__(self, 'value').shape),
+                           **extra_attrs)
+    
     @classmethod
     def new(cls, value = None, **kwargs):
         return cls(None, value = value, **kwargs)
@@ -1011,6 +1061,15 @@ class ONDEReferenceArray(ONDEBase):
     def _indices_for_object(self,obj):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
         return self.refs(obj) # __call__ method does reverse lookup to return a set of indices 
+
+    def _repr_short(self, onde_class=None):
+        return f"ONDEReferenceArray(shape={str(object.__getattribute__(self, 'refs')._shape):s})"
+    
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        return repr_helper(indentation, "ONDEReferenceArray",
+                           ID=f"{id(self):x}",
+                           shape=str(object.__getattribute__(self, 'refs')._shape),
+                           **extra_attrs)
     
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
@@ -1076,7 +1135,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs", "_has_attr"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs", "_has_attr","_repr","_repr_short"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1127,6 +1186,10 @@ class ONDEObject(ONDEBase):
 
         return _ONDE_attrs._set_attr(name, value)
 
+    def _list_attrs(self):
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        return [attrname for attrname in _ONDE_attrs]
+    
     def __dir__(self):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
         return ["_freeze","_frozen"] + [attrname for attrname in _ONDE_attrs]
@@ -1173,6 +1236,32 @@ class ONDEObject(ONDEBase):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
         return _ONDE_attrs(obj) # __call__ method does reverse lookup to return a set of indices
+
+    def _repr_short(self, onde_class=None):
+        myclass=type(self).__name__
+        if onde_class is not None:
+            myclass=f"{onde_class:s}({myclass:s})"
+            pass
+        
+        return f"{myclass:s}(ID={id(self):x})"
+    
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        myclass=type(self).__name__
+        if onde_class is not None:
+            myclass=f"{onde_class:s}({myclass:s})"
+            pass
+        
+        new_extra_attrs=collections.OrderedDict()
+        if onde_class is None:
+            _ONDE_attrs=object.__getattribute__(self, '_ONDE_attrs')
+            for attrname in _ONDE_attrs._keys():
+                new_extra_attrs[attrname]=object.__getattribute__(_ONDE_attrs[attrname], "_repr_short")()
+                pass
+            pass
+        new_extra_attrs.update(extra_attrs)
+        return repr_helper(indentation, myclass,
+                           ID=f"{id(self):x}",
+                           **new_extra_attrs)
     
     @classmethod
     def new(cls, ONDE_TYPE = None, _ONDE_attrs = None, **kwargs):
@@ -1221,6 +1310,7 @@ class ONDEGraphSnapshot(ONDEObject):
             newobj._freeze()
             pass
         return newobj
+
     pass
 
 class ONDEField(object):
@@ -1345,13 +1435,16 @@ class ONDEClassInstanceWrapper(object):
         
         if isinstance(obj,ONDEObject):
             classdefs = _graph._class_defs
-            field_dict = classdefs.get_fields_dict(obj)
-            if attrname in field_dict:
-                field = field_dict[attrname]
+            if attrname=="ONDE_TYPE":
+                return attrname
+            (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set) = classdefs.get_fields_dict(obj)
+            if attrname in combined_fields_dict:
+                field = combined_fields_dict[attrname]
                 full_name = field.class_prefix + ":" + field.name
                 return full_name
             else:
-                raise NameError(f"Unknown attribute {attrname:s} on ONDEObject of type {obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s}.")
+                # raise NameError(f"Unknown attribute {attrname:s} on ONDEObject of type {obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s}.")
+                return None
             pass
         return attrname
             
@@ -1369,6 +1462,10 @@ class ONDEClassInstanceWrapper(object):
         full_name = key
         if get_method_name == "_get_attr":
             full_name = self._full_fieldname_from_attrname(_graph, _obj, key)
+            if full_name is None:
+                full_name = key
+                pass
+            
             if not _obj._has_attr(full_name):
                 return None
             
@@ -1414,6 +1511,9 @@ class ONDEClassInstanceWrapper(object):
         full_name = key
         if set_method_name == "_set_attr":
             full_name = self._full_fieldname_from_attrname(_graph, our_obj, key)       
+            if full_name is None:
+                full_name = key
+                pass
             pass
         
         if isinstance(value,ONDEClassInstanceWrapper):
@@ -1524,8 +1624,18 @@ class ONDEClassInstanceWrapper(object):
             pass
         pass
 
+    def _basic_field_set(self):
+        if self._proxy is not None:
+            obj = self._proxy._get_obj()
+            pass
+        else:
+            obj = self._obj
+            pass
 
-    def __dir__(self):
+        fields = onde_basic_fields[obj.__class__.__name__]
+        return frozenset(fields)
+
+    def _class_field_set(self):
         if self._proxy is not None:
             obj = self._proxy._get_obj()
             pass
@@ -1533,7 +1643,6 @@ class ONDEClassInstanceWrapper(object):
             obj = self._obj
             pass
      
-        fields = onde_basic_fields[obj.__class__.__name__]
         if self._proxy is not None:
             _graph = self._proxy._graph
             pass
@@ -1545,13 +1654,78 @@ class ONDEClassInstanceWrapper(object):
         if classdefs is not None:
 
             if isinstance(obj, ONDEObject):
-                fields +=  tuple(classdefs.get_fields_dict(obj).keys())
-                pass
+                (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set)=classdefs.get_fields_dict(obj)
+                return frozenset(list(full_fields_dict.keys()))
             pass
         
-                
-        return list(fields)
+        return frozenset()
+
+    def _shorthand_field_set(self):
+        if self._proxy is not None:
+            obj = self._proxy._get_obj()
+            pass
+        else:
+            obj = self._obj
+            pass
+     
+        if self._proxy is not None:
+            _graph = self._proxy._graph
+            pass
+        else:
+            _graph = self._graph
+            pass
+        
+        classdefs = _graph._class_defs
+        if classdefs is not None:
+
+            if isinstance(obj, ONDEObject):
+                (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set)=classdefs.get_fields_dict(obj)
+                return frozenset(list(shorthand_fields_dict.keys()))
+            pass
+        
+        return frozenset()
+
+    def _assigned_attr_field_set(self):
+        """Fields defined by actual assigned attributes of this object"""
+        if self._proxy is not None:
+            obj = self._proxy._get_obj()
+            pass
+        else:
+            obj = self._obj
+            pass
+
+        return frozenset(obj._list_attrs())
+
+    def _all_field_set(self):
+        return list(self._basic_field_set()|self._class_field_set()|self._shorthand_field_set()|self._assigned_attr_field_set()).sorted()
     
+    def __dir__(self):
+        if self._proxy is not None:
+            obj = self._proxy._get_obj()
+            pass
+        else:
+            obj = self._obj
+            pass
+     
+        if self._proxy is not None:
+            _graph = self._proxy._graph
+            pass
+        else:
+            _graph = self._graph
+            pass
+        
+        classdefs = _graph._class_defs
+        if classdefs is not None:
+
+            if isinstance(obj, ONDEObject):
+                (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set)=classdefs.get_fields_dict(obj)
+                return sorted(list(concise_set|self._basic_field_set()))
+            pass
+        
+        return []   
+      
+
+        
     def __getattribute__(self,name):
         if name.startswith('_'):
             return object.__getattribute__(self,name)
@@ -1665,8 +1839,37 @@ class ONDEClassInstanceWrapper(object):
                 
 """                
         
-            
-            
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        our_proxy = object.__getattribute__(self,"_proxy")
+        our_obj = object.__getattribute__(self,"_obj")
+        _graph = object.__getattribute__(self,"_graph")
+
+        if our_proxy is not None:
+            our_obj = our_proxy._get_obj()
+            _graph = our_proxy._graph
+            pass
+
+        classdefs = _graph._class_defs
+        if classdefs is not None:
+
+            if isinstance(our_obj, ONDEObject):
+                (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set)=classdefs.get_fields_dict(our_obj)
+                attrdict=collections.OrderedDict()
+                for attrname in sorted(list(concise_set)):
+                    attrval = self._get_attr(attrname)
+                    if attrval is not None:
+                        attrdict[attrname] = attrval._repr_short()
+                        pass
+                    else:
+                        attrdict[attrname] = "None"
+                        pass
+                    pass
+                return our_obj._repr(indentation,onde_class = f"InstanceWrapper({our_obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s})", extra_attrs = attrdict)
+            pass
+        return our_obj._repr(indentation)
+        
+    def __repr__(self):
+        return self._repr(0)
     
     @classmethod
     def new_from_proxy(cls, proxy):
@@ -1714,6 +1917,7 @@ class ONDEClassDefinitions(object):
         pass
     
     def get_fields_dict(self,obj):
+        """returns three dictionaries by field name of ONDEField: the shorthand dictionary, the full dictionary, the combined dictionary, and the concise set. Automatically omits any shorthands that conflict with actual attributes. The concise set includes the shortest name for each field plus any fields which don't correspond to ONDEField objects""" 
         onde_type_value = obj._ONDE_attrs["ONDE_TYPE"]
         assert(isinstance(onde_type_value,ONDEArray))
         
@@ -1728,29 +1932,45 @@ class ONDEClassDefinitions(object):
             type_tags = frozenset()
             pass
 
-        field_cache_key = (class_derivation, type_tags)
+        field_cache_key = (class_derivation, type_tags, frozenset(obj._ONDE_attrs._keys()))
 
         if field_cache_key in self.field_cache:
             return self.field_cache[field_cache_key]
 
-        fields_dict = {}
+        shorthand_fields_dict = collections.OrderedDict()
+        full_fields_dict = collections.OrderedDict()
+        combined_fields_dict = collections.OrderedDict()
         derivation_index=0
         mandatory_acc_classes = set()
-
+        shorthand_blacklist = set()
         
         def add_field(fieldname,field,extra_keys):
-            fields_dict[fieldname]=field.attributes[fieldname]
+            full_fields_dict[fieldname]=field.attributes[fieldname]
+            combined_fields_dict[fieldname]=field.attributes[fieldname]
             for key in extra_keys:
-                if key in fields_dict:
+                if key in shorthand_blacklist:
+                    continue
+                if key in obj._ONDE_attrs:
+                    # Don't allow overriding an actual attribute of this object with a shorthand
+                    continue
+                if key in shorthand_fields_dict:
                     # key already present
-                    if fields_dict[key].class_prefix==fields_dict[fieldname].class_prefix and fields_dict[key].name==fields_dict[fieldname].key:
+                    if shorthand_fields_dict[key].class_prefix==shorthand_fields_dict[fieldname].class_prefix and shorthand_fields_dict[key].name==shorthand_fields_dict[fieldname].key:
                         # Override of a shorthand for the same thing already present. This is allowable.
-                        fields_dict[key]=fields_dict[fieldname]
+                        shorthand_fields_dict[key]=full_fields_dict[fieldname]
+                        combined_fields_dict[key]=full_fields_dict[fieldname]
                         pass
                     else:
-                        # Conflicting shorthands. Remove pre-existing entry.
-                        del fields_dict[key]
+                        # Conflicting shorthands. Remove pre-existing entry and blacklist
+                        
+                        del shorthand_fields_dict[key]
+                        del combined_fields_dict[key]
+                        shorthand_blacklist.add(key)
                         pass
+                    pass
+                else:
+                    shorthand_fields_dict[key]=full_fields_dict[fieldname]
+                    combined_fields_dict[key]=full_fields_dict[fieldname]
                     pass
                 pass
             pass
@@ -1805,11 +2025,37 @@ class ONDEClassDefinitions(object):
                 add_field(fieldname,acc_class.attributes[fieldname],extra_keys)
                 pass
             pass
+        # Construct concise set
+        reverse_combined = {}
+        for fieldname in combined_fields_dict:
+            if id(combined_fields_dict[fieldname]) in reverse_combined:
+                reverse_combined[id(combined_fields_dict[fieldname])].append(fieldname)
+                pass
+            else:
+                reverse_combined[id(combined_fields_dict[fieldname])] = [fieldname]
+                pass
+            pass
+
+        concise_set=set()
+        for objid in reverse_combined:
+            shortest = sorted(reverse_combined[objid], key=len)[0]
+            concise_set.add(shortest)
+            pass
+
+        for attrname in obj._ONDE_attrs:
+            if attrname not in full_fields_dict:
+                concise_set.add(attrname)
+                pass
+            pass
+
+        concise_set_frozen=frozenset(concise_set)
         
 
+        # import pdb
+        # pdb.set_trace()
         
-        self.field_cache[field_cache_key] = fields_dict
-        return fields_dict
+        self.field_cache[field_cache_key] = (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set_frozen)
+        return (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set_frozen)
 
     
     @classmethod
@@ -2246,7 +2492,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr", "_get_attr","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph"}:
+            if name in { "_set_attr", "_get_attr","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -2407,7 +2653,15 @@ class ONDEProxy(object):
         _trans = object.__getattribute__(self, "_trans")
 
         return self.__class__(_graph=_graph, _path=full_path, _trans=_trans)
-        
+
+    def _repr_short(self, onde_class=None):
+        return object.__getattribute__(self._get_obj(), "_repr_short")(onde_class)
+    
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        return repr_helper(indentation, f"Writable proxy of {object.__getattribute__(self._get_obj(), '_repr')(indentation+2, onde_class=onde_class, extra_attrs=extra_attrs):s}")
+    
+    def __repr__(self):
+        return f"Writable proxy of {repr(self._get_obj()):s}"
     pass
 
 
