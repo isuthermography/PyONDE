@@ -572,7 +572,9 @@ class ONDEPath(tuple):
 
 class ONDEBase(object):
     # _graph = None # ONDEGraph object
-    _referencedby = None # set of ONDEBase objects that reference this object. They should all be part of the given ONDEGraph. The _referencedby member can still be changed even after an instance is frozen becuase new objects can reference it. Note that the _referencedby field is generally only updated to include new objects when those objects become frozen.
+    _referencedby = None # set of ONDEBase objects that reference this object. They should all be part of the given ONDEGraph. The _referencedby member can still be changed even after an instance is frozen becuase new objects can reference it. Note that the _referencedby field is generally only updated to include new objects when those objects become frozen. Access is protected by _referencedby_lock.
+    _referencedby_lock = None # threading.Lock object that protects _referencedby
+    
     _frozen = None # True/False: has this object been finalized and therefore become immutable
     _modification_scopes = None # A set of scopes for which the ancestor nodes in the graph have been replaced for the transaction in which this node is being updated. It is only valid for use within the context of the transaction in which the node is being created and it is cleared when the node is frozen.
 
@@ -582,7 +584,7 @@ class ONDEBase(object):
         #    _referencedby = object.__getattribute__(_orig, "_referencedby")
         #    pass
         if "_referencedby" in kwargs:
-            _referencedby = kwargs["_referencedby"]
+            _referencedby = set(kwargs["_referencedby"])
             del kwargs["_referencedby"]
             pass
         _frozen = False
@@ -596,6 +598,7 @@ class ONDEBase(object):
             _referencedby = set()
             pass
         object.__setattr__(self, "_referencedby", _referencedby)
+        object.__setattr__(self, "_referencedby", threading.Lock())
         object.__setattr__(self, "_frozen", False)
         if _frozen:
             self._freeze() # Derived class may have additional operations
@@ -684,7 +687,10 @@ class ONDEBase(object):
 
     def _add_referencedby(self, obj_that_references_us):
         _referencedby = object.__getattribute__(self, "_referencedby")
-        _referencedby.add(obj_that_references_us)
+        _referencedby_lock = object.__getattribute__(self, "_referencedby_lock")
+        with _referencedby_lock: 
+            _referencedby.add(obj_that_references_us)
+            pass
         pass
 
     def _follow_path(self, path):
