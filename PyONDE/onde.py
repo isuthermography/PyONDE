@@ -62,7 +62,7 @@ onde_basic_fields = {
                 "_has_attr",
                 "_list_attrs"
                 ),
-            "ONDEGraphSnapshot":(
+            "ONDEFileGraphSnapshot":(
                 "_freeze",
                 "_frozen",
                 "_get_attr",
@@ -354,12 +354,12 @@ class TwoWayArray(object):
     pass
 
 
-class ONDEGraph(object):
-    """Represents the graph of interconnected ONDE objects
-    and attributes. May relate to any number of actual files."""
+class ONDEFileGraph(object):
+    """Represents the subgraph of interconnected ONDE objects
+    and attributes that are or will be contained within some particular ONDE file. It has an associated set of ONDEClassDefinitions that are used to interpret the attached objects."""
     _lock = None # threading.Lock that protects access to replace the snapshot.
     _lock_ownerthread = None # Writes protected by _lock, the threading.get_ident() of whichever thread owns the lock
-    _latest_snap = None # class ONDEGraphSnapshot
+    _latest_snap = None # class ONDEFileGraphSnapshot
     _class_defs = None # ONDEClassDefinitions, optional
 
     def __init__(self, _class_defs = None, _latest_snap = None):
@@ -367,7 +367,7 @@ class ONDEGraph(object):
         object.__setattr__(self, "_lock", threading.Lock())
 
         if _latest_snap is None:
-            _latest_snap = ONDEGraphSnapshot.new()
+            _latest_snap = ONDEFileGraphSnapshot.new()
 
             pass
         
@@ -471,10 +471,24 @@ class ONDEGraph(object):
         
     pass
 
+class ONDEDatasetFileGraph(ONDEFileGraph):
+    """Represents an ONDEFileGraph that is presumed to contain at its base level a number of ONDE_DATASET objects as per the ONDE 1.0 specification."""
+    # Inherited members from ONDEFileGraph
+    # _lock = None # threading.Lock that protects access to replace the snapshot.
+    # _lock_ownerthread = None # Writes protected by _lock, the threading.get_ident() of whichever thread owns the lock
+    # _latest_snap = None # class ONDEFileGraphSnapshot
+    # _class_defs = None # ONDEClassDefinitions, optional
+
+    def __init__(self, _class_defs = None, _latest_snap = None):
+        super().__init__(self, _class_defs = _class_defs, _latest_snap = _latest_snap)
+        pass
+    # Various methods inherited from ONDEFileGraph
+    # !!!*** should provide way to add a dataset that automatically sets the index
+    pass
 
 class ONDETransaction(object):
-    """Represents a transaction in which the ONDEGraph is modified"""
-    graph = None # ONDEGraph object
+    """Represents a transaction in which the ONDEFileGraph is modified"""
+    graph = None # ONDEFileGraph object
     scope = None
     snap = None # This is the snapshot we're modifying
 
@@ -489,14 +503,14 @@ class ONDETransaction(object):
     def __enter__(self):
         lockowner = object.__getattribute__(self.graph, "_lock_ownerthread")
         if lockowner == threading.get_ident():
-            raise RuntimeError(f"Error creating a new transaction while another transaction is already open on the graph by the same thread. This probably means that you are attempting a change on an object not accessed via the transaction. Within a transaction, always access objects via the transaction or scope objects.")
+            raise RuntimeError(f"Error creating a new transaction while another transaction is already open on the file graph by the same thread. This probably means that you are attempting a change on an object not accessed via the transaction. Within a transaction, always access objects via the transaction or scope objects.")
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.acquire()
 
         object.__setattr__(self.graph, "_lock_ownerthread", threading.get_ident())
         
         snap = object.__getattribute__(self.graph, "_latest_snap")
-        self.snap = ONDEGraphSnapshot(_orig=snap) # Create mutable copy of most recent snapshot
+        self.snap = ONDEFileGraphSnapshot(_orig=snap) # Create mutable copy of most recent snapshot
         
         return self.scope
 
@@ -571,8 +585,8 @@ class ONDEPath(tuple):
     pass
 
 class ONDEBase(object):
-    # _graph = None # ONDEGraph object
-    _referencedby = None # set of ONDEBase objects that reference this object. They should all be part of the given ONDEGraph. The _referencedby member can still be changed even after an instance is frozen becuase new objects can reference it. Note that the _referencedby field is generally only updated to include new objects when those objects become frozen. Access is protected by _referencedby_lock.
+    # _graph = None # ONDEFileGraph object
+    _referencedby = None # set of ONDEBase objects that reference this object. The _referencedby member can still be changed even after an instance is frozen becuase new objects can reference it. Note that the _referencedby field is generally only updated to include new objects when those objects become frozen. Access is protected by _referencedby_lock.
     _referencedby_lock = None # threading.Lock object that protects _referencedby
     
     _frozen = None # True/False: has this object been finalized and therefore become immutable
@@ -1288,7 +1302,7 @@ class ONDEObject(ONDEBase):
         return newobj
     pass
 
-class ONDEGraphSnapshot(ONDEObject):
+class ONDEFileGraphSnapshot(ONDEObject):
     """ Not allowed to be referenced by any other ONDEObject.
     The ONDE_TYPE field should be empty.
     Attributes represent entry points of the graph."""
@@ -1418,7 +1432,7 @@ class ONDEClassInstanceWrapper(object):
     # only _proxy OR _obj can ever be set
     _proxy = None # an ONDEProxy for the ONDEObject instance
     _obj = None # an ONDEObject instance
-    _graph = None # ONDEGraph, used only with _obj
+    _graph = None # ONDEFileGraph, used only with _obj
     # _our_class = None # the ONDEClass instance
     
     def __init__(self, **kwargs):
@@ -2433,7 +2447,7 @@ def graph_replace_node(trans, scope, path, orig_node, replacement_node):
 
 class ONDEProxy(object):
     """Mutable proxy reference to a graph entry that remembers context."""
-    _graph = None # ONDEGraph object we started with 
+    _graph = None # ONDEFileGraph object we started with 
     _path = None # ONDEPath of the object we are proxying
     # _obj = None # The actual object we are proxying
     # _obj_snap = None # Snapshot from which we obtained _obj
