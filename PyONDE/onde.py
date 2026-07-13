@@ -80,9 +80,10 @@ def repr_helper(indentation, classname, **attrdict):
         pass
     return "\n".join(lines)
 
-def onde_from_python(value):
+def onde_from_python(value,field):
+    """field is an ONDEField or None. So far it is not used because we don't have code to parse the type specification"""
     if isinstance(value,numbers.Integral) or isinstance(value, numbers.Real) or isinstance(value,numbers.Complex) or  isinstance(value,str) or isinstance(value,np.str_):
-        return onde.ONDEValue.new(value)
+        return ONDEValue.new(value)
 
     if isinstance(value,collections.abc.Sequence):
         subvalues = []
@@ -1431,22 +1432,22 @@ class ONDEClassInstanceWrapper(object):
     def _full_fieldname_from_attrname(self, _graph, obj, attrname):
         #_graph = object.__getattribute__(self,"_graph")
         if attrname in onde_basic_fields[obj.__class__.__name__]:
-            return attrname
+            return (attrname, None)
         
         if isinstance(obj,ONDEObject):
             classdefs = _graph._class_defs
             if attrname=="ONDE_TYPE":
-                return attrname
+                return (attrname, None)
             (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set) = classdefs.get_fields_dict(obj)
             if attrname in combined_fields_dict:
                 field = combined_fields_dict[attrname]
                 full_name = field.class_prefix + ":" + field.name
-                return full_name
+                return (full_name, field)
             else:
                 # raise NameError(f"Unknown attribute {attrname:s} on ONDEObject of type {obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s}.")
-                return None
+                return (None, None)
             pass
-        return attrname
+        return (attrname, None)
             
     def _get_attr_or_item(self,get_method_name,key):
 
@@ -1461,7 +1462,7 @@ class ONDEClassInstanceWrapper(object):
         
         full_name = key
         if get_method_name == "_get_attr":
-            full_name = self._full_fieldname_from_attrname(_graph, _obj, key)
+            (full_name, field) = self._full_fieldname_from_attrname(_graph, _obj, key)
             if full_name is None:
                 full_name = key
                 pass
@@ -1509,8 +1510,9 @@ class ONDEClassInstanceWrapper(object):
             pass
         
         full_name = key
+        field = None
         if set_method_name == "_set_attr":
-            full_name = self._full_fieldname_from_attrname(_graph, our_obj, key)       
+            (full_name, field) = self._full_fieldname_from_attrname(_graph, our_obj, key)       
             if full_name is None:
                 full_name = key
                 pass
@@ -1521,7 +1523,7 @@ class ONDEClassInstanceWrapper(object):
             target_obj = object.__getattribute__(value,"_obj")
             if our_proxy is not None and target_proxy is not None:
                 set_method = getattr(our_proxy,set_method_name)
-                set_method(full_name,_proxy) # self._proxy._set_attr(key,_proxy)
+                set_method(full_name,target_proxy) # self._proxy._set_attr(key,target_proxy)
                 pass
             elif self._proxy is not None and _obj is not None:
                 set_method = getattr(self._proxy,set_method_name)
@@ -1568,7 +1570,7 @@ class ONDEClassInstanceWrapper(object):
         else:
             #raise ValueError(f"Attribute values should be ONDEBase or ONDEProxy or ONDEClassInstanceWrapper")
             #build an object from python structures
-            target_obj = onde_from_python(value)
+            target_obj = onde_from_python(value, field)
             if our_proxy is not None:
                 set_method = getattr(our_proxy,set_method_name)
                 set_method(full_name,target_obj)
