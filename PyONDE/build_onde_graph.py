@@ -16,5 +16,5 @@ obj._freeze()
 snapshot = onde.ONDEFileGraphSnapshot.new(obj = obj, _frozen = True)
 graph = onde.ONDEFileGraph.new(class_def_csv_path,snapshot)
 
-graph.obj._set_attr("ONDE:LABEL",onde.ONDEValue.new("label value", _frozen = True))
-assert(graph.obj._get_attr("ONDE:LABEL").value=="label value")
+graph["obj"]._set_attr("ONDE:LABEL",onde.ONDEValue.new("label value", _frozen = True))
+assert(graph["obj"]._get_attr("ONDE:LABEL").value=="label value")

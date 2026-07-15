@@ -1,6 +1,4 @@
 # Road map:
-# * Onde base referencedby needs to be protected by a lock
-# * change onde graph to onde datasetfile graph, Onde graph snapshot to onde dataset file graph snapshot
 # * add onde datasetfile abstraction
 # * add onde file object abstraction representing a finalized ondebase object contained within a file, with references to the object as well as the hdf5 path within the file
 # * each ondebase object has a mutable set of onde file objects that reference it. 
@@ -359,25 +357,26 @@ class ONDEFileGraph(object):
     and attributes that are or will be contained within some particular ONDE file. It has an associated set of ONDEClassDefinitions that are used to interpret the attached objects."""
     _lock = None # threading.Lock that protects access to replace the snapshot.
     _lock_ownerthread = None # Writes protected by _lock, the threading.get_ident() of whichever thread owns the lock
-    _latest_snap = None # class ONDEFileGraphSnapshot
-    _class_defs = None # ONDEClassDefinitions, optional
+    latest_snap = None # class ONDEFileGraphSnapshot
+    class_defs = None # ONDEClassDefinitions, optional
 
-    def __init__(self, _class_defs = None, _latest_snap = None):
+    def __init__(self, class_defs = None, latest_snap = None):
         # self._lock = threading.Lock()
         object.__setattr__(self, "_lock", threading.Lock())
 
-        if _latest_snap is None:
-            _latest_snap = ONDEFileGraphSnapshot.new()
+        if latest_snap is None:
+            latest_snap = ONDEFileGraphSnapshot.new()
 
             pass
         
-        object.__setattr__(self, "_class_defs", _class_defs)
+        object.__setattr__(self, "class_defs", class_defs)
         
-        # self._latest_snap = snapshot
-        object.__setattr__(self, "_latest_snap", _latest_snap)
+        # self.latest_snap = snapshot
+        object.__setattr__(self, "latest_snap", latest_snap)
 
         pass
     
+    r"""
     def __getattribute__(self, name):
         if name.startswith("_"):
             
@@ -453,12 +452,33 @@ class ONDEFileGraph(object):
         
         _latest_snap._set_item(index,value)
         pass
+    """
 
+    def __getitem__(self, name):
+        latest_snap = object.__getattribute__(self, "latest_snap")
+        
+        # call ONDEProxy
+        
+        snap_proxy = ONDEProxy.new_from_snapshot(self, latest_snap)
+        obj_proxy = ONDEProxy.new_from_proxy(snap_proxy, name)
+
+        if self.class_defs is not None:
+            return ONDEClassInstanceWrapper.new_from_proxy(obj_proxy)
+        return obj_proxy
+
+    def __setitem__(self, name, value):
+        latest_snap = object.__getattribute__(self, "latest_snap")
+
+        snap_proxy = ONDEProxy.new_from_snapshot(self, latest_snap)
+
+        snap_proxy._set_item(name,value)
+
+        pass
    
     def new_obj(self,onde_classname,**kwargs):
-        if self._class_defs is not None:
+        if self.class_defs is not None:
             return ONDEClassInstanceWrapper.new_obj(self,onde_classname,**kwargs)
-        return ONDEObject.new(ONDE_TYPE = onde_classname,_ONDE_attrs=None,**kwargs)
+        return ONDEObject.new(ONDE_TYPE = ONDEArray.new([onde_classname], _frozen = True),**kwargs)
 
     @classmethod
     def new(cls,class_def_csv_path=None,snapshot=None):
@@ -467,7 +487,7 @@ class ONDEFileGraph(object):
             defs = ONDEClassDefinitions.load_from_csv(class_def_csv_path)
             pass
         
-        return cls(_class_defs = defs,_latest_snap=snapshot)
+        return cls(class_defs = defs,latest_snap=snapshot)
         
     pass
 
@@ -476,11 +496,11 @@ class ONDEDatasetFileGraph(ONDEFileGraph):
     # Inherited members from ONDEFileGraph
     # _lock = None # threading.Lock that protects access to replace the snapshot.
     # _lock_ownerthread = None # Writes protected by _lock, the threading.get_ident() of whichever thread owns the lock
-    # _latest_snap = None # class ONDEFileGraphSnapshot
-    # _class_defs = None # ONDEClassDefinitions, optional
+    # latest_snap = None # class ONDEFileGraphSnapshot
+    # class_defs = None # ONDEClassDefinitions, optional
 
-    def __init__(self, _class_defs = None, _latest_snap = None):
-        super().__init__(self, _class_defs = _class_defs, _latest_snap = _latest_snap)
+    def __init__(self, class_defs = None, latest_snap = None):
+        super().__init__(self, class_defs = class_defs, latest_snap = latest_snap)
         pass
     # Various methods inherited from ONDEFileGraph
     # !!!*** should provide way to add a dataset that automatically sets the index
@@ -509,7 +529,7 @@ class ONDETransaction(object):
 
         object.__setattr__(self.graph, "_lock_ownerthread", threading.get_ident())
         
-        snap = object.__getattribute__(self.graph, "_latest_snap")
+        snap = object.__getattribute__(self.graph, "latest_snap")
         self.snap = ONDEFileGraphSnapshot(_orig=snap) # Create mutable copy of most recent snapshot
         
         return self.scope
@@ -517,7 +537,7 @@ class ONDETransaction(object):
     
     def __exit__(self, exc_type, exc, tb):
         self.snap._freeze()
-        object.__setattr__(self.graph, "_latest_snap",self.snap)
+        object.__setattr__(self.graph, "latest_snap",self.snap)
         object.__setattr__(self.graph, "_lock_ownerthread", None)
         _lock = object.__getattribute__(self.graph, "_lock")
         _lock.release()
@@ -592,8 +612,12 @@ class ONDEBase(object):
     _frozen = None # True/False: has this object been finalized and therefore become immutable
     _modification_scopes = None # A set of scopes for which the ancestor nodes in the graph have been replaced for the transaction in which this node is being updated. It is only valid for use within the context of the transaction in which the node is being created and it is cleared when the node is frozen.
 
+    _file_realizations = None # A set of ONDEFileObjects that represent realizations in hdf5 of this object. Locked by _file_realizations_lock.
+    _file_realizations_lock = None # A threading.Lock object that protects _file_realizations.
+
     def __init__(self, _orig = None, **kwargs):
         _referencedby = None
+        _file_realizations = None
         #if _orig is not None:
         #    _referencedby = object.__getattribute__(_orig, "_referencedby")
         #    pass
@@ -601,6 +625,11 @@ class ONDEBase(object):
             _referencedby = set(kwargs["_referencedby"])
             del kwargs["_referencedby"]
             pass
+        if "_file_realizations" in kwargs:
+            _file_relaizations = set(kwargs["_file_realizations"])
+            del kwargs["_file_realizations"]
+            pass
+        
         _frozen = False
         if "_frozen" in kwargs:
             _frozen = kwargs["_frozen"]
@@ -611,8 +640,14 @@ class ONDEBase(object):
         if _referencedby is None:
             _referencedby = set()
             pass
+        if _file_realizations is None:
+            _file_realizations = set()
+            pass
+        
         object.__setattr__(self, "_referencedby", _referencedby)
-        object.__setattr__(self, "_referencedby", threading.Lock())
+        object.__setattr__(self, "_referencedby_lock", threading.Lock())
+        object.__setattr__(self, "_file_realizations", _file_realizations)
+        object.__setattr__(self, "_file_realizations_lock", threading.Lock())
         object.__setattr__(self, "_frozen", False)
         if _frozen:
             self._freeze() # Derived class may have additional operations
@@ -624,9 +659,9 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_get_data","_set_data","_get_item","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_get_data","_set_data","_get_item","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short"}:
                 return object.__getattribute__(self, name)
-            raise IndexError("ONDEBase: Attributes may not have leading underscores")
+            raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
 
     def __setattr__(self, name, value):
@@ -1026,6 +1061,10 @@ class ONDEReferenceArray(ONDEBase):
         if self._frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
 
+        if isinstance(ref, ONDEClassInstanceWrapper) or isinstance(ref, ONDEProxy):
+            ref = ref._get_obj()
+            pass
+        
         if not isinstance(ref,ONDEBase):
             raise ValueError(f"Attempting to assign index {str(index)} of an ONDEReferenceArray to an object of class {ref.__class__.__name__} that is not an ONDEBase reference")
 
@@ -1205,6 +1244,10 @@ class ONDEObject(ONDEBase):
 
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
 
+        if isinstance(value, ONDEClassInstanceWrapper) or isinstance(value, ONDEProxy):
+            value = value._get_obj()
+            pass
+        
         return _ONDE_attrs._set_attr(name, value)
 
     def _list_attrs(self):
@@ -1236,7 +1279,9 @@ class ONDEObject(ONDEBase):
         path_entry = path[0]
 
         if isinstance(path_entry, str):
-            return self._get_attr(path_entry)._follow_path(ONDEPath(path[1:]))
+            #return self._get_attr(path_entry)._follow_path(ONDEPath(path[1:]))
+            # ONDEFileGraphSnapshot (our subclass) uses items not attributes. So here we explicitly use our own _get_attr() to expand out the path entry
+            return ONDEObject._get_attr(self,path_entry)._follow_path(ONDEPath(path[1:]))
         else:
             raise AttributeError(f"Cannot index {self.__class__.__name__} by {path_entry}")
         
@@ -1245,7 +1290,9 @@ class ONDEObject(ONDEBase):
     def _assign_pathel(self, pathel, value):
         if self._frozen:
             raise RuntimeError(f"Cannot assign {str(value)} to {str(pathel)} element of frozen object")
-        self._set_attr(pathel, value)
+        # ONDEFileGraphSnapshot (our subclass) uses items not attributes. So here we explicitly use our own _set_attr() to expand out the path entry
+        #self._set_attr(pathel, value)
+        ONDEObject._set_attr(self,pathel, value)
         pass
     
     def _list_edges(self):
@@ -1310,6 +1357,29 @@ class ONDEFileGraphSnapshot(ONDEObject):
         super().__init__(_orig, **kwargs)
         pass
 
+    # Unlike ONDEObject, we index with _get_item, not with
+    # _get_attr. Therefore we override the attribute methods
+    # with the ones from ONDEBase.
+
+    _get_attr=ONDEBase._get_attr
+    _has_attr=ONDEBase._has_attr
+    _set_attr=ONDEBase._set_attr
+    __getattribute__=ONDEBase.__getattribute__
+    __setattr__=ONDEBase.__setattr__
+
+    def _get_item(self,index):
+        return ONDEObject._get_attr(self,index)
+
+    def _set_item(self,index,value):
+        return ONDEObject._set_attr(self,index,value)
+
+    def __getitem__(self,index):
+        return self._get_item(index)
+
+    def __setitem__(self,index,value):
+        return self._set_item(index,value)
+    
+    
     #@classmethod
     #def new(cls, entry_points = None):
     #    if entry_points is None:
@@ -1325,7 +1395,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
             pass
         newobj = cls(None, ONDE_TYPE = ONDEArray.new([],_frozen = True))
         for attrname in kwargs:
-            newobj._set_attr(attrname, kwargs[attrname])
+            newobj._set_item(attrname, kwargs[attrname])
             pass
         if _frozen:
             newobj._freeze()
@@ -1449,13 +1519,18 @@ class ONDEClassInstanceWrapper(object):
             pass
         pass
 
+    def _get_obj(self):
+        if self._obj is not None:
+            return self._obj
+        return self._proxy._get_obj()
+        
     def _full_fieldname_from_attrname(self, _graph, obj, attrname):
         #_graph = object.__getattribute__(self,"_graph")
         if attrname in onde_basic_fields[obj.__class__.__name__]:
             return (attrname, None)
         
         if isinstance(obj,ONDEObject):
-            classdefs = _graph._class_defs
+            classdefs = _graph.class_defs
             if attrname=="ONDE_TYPE":
                 return (attrname, None)
             (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set) = classdefs.get_fields_dict(obj)
@@ -1545,17 +1620,17 @@ class ONDEClassInstanceWrapper(object):
                 set_method = getattr(our_proxy,set_method_name)
                 set_method(full_name,target_proxy) # self._proxy._set_attr(key,target_proxy)
                 pass
-            elif self._proxy is not None and _obj is not None:
+            elif self._proxy is not None and target_obj is not None:
                 set_method = getattr(self._proxy,set_method_name)
-                set_method(full_name,_obj)
+                set_method(full_name,target_obj)
                 pass
-            elif self._obj is not None and _proxy is not None:
+            elif self._obj is not None and target_proxy is not None:
                 set_method = getattr(self._obj,set_method_name)
-                set_method(full_name,_proxy._get_obj()) # e.g. self._obj._set_attr(key,_proxy._get_obj())
+                set_method(full_name,target_proxy._get_obj()) # e.g. self._obj._set_attr(key,_proxy._get_obj())
                 pass
-            elif self._obj is not None and _obj is not None:
+            elif self._obj is not None and target_obj is not None:
                 set_method = getattr(self._obj,set_method_name)
-                set_method(full_name,_obj)
+                set_method(full_name,target_obj)
                 pass
             else:
                 assert(False) # Exactly one of _obj and _proxy should be valid
@@ -1672,7 +1747,7 @@ class ONDEClassInstanceWrapper(object):
             _graph = self._graph
             pass
         
-        classdefs = _graph._class_defs
+        classdefs = _graph.class_defs
         if classdefs is not None:
 
             if isinstance(obj, ONDEObject):
@@ -1697,7 +1772,7 @@ class ONDEClassInstanceWrapper(object):
             _graph = self._graph
             pass
         
-        classdefs = _graph._class_defs
+        classdefs = _graph.class_defs
         if classdefs is not None:
 
             if isinstance(obj, ONDEObject):
@@ -1736,7 +1811,7 @@ class ONDEClassInstanceWrapper(object):
             _graph = self._graph
             pass
         
-        classdefs = _graph._class_defs
+        classdefs = _graph.class_defs
         if classdefs is not None:
 
             if isinstance(obj, ONDEObject):
@@ -1765,7 +1840,7 @@ class ONDEClassInstanceWrapper(object):
 
         field_dict = {}
         if isinstance(obj,ONDEObject):
-            classdefs = _graph._class_defs
+            classdefs = _graph.class_defs
             field_dict = classdefs.get_fields_dict(obj)
             if name in field_dict:
                 field = field_dict[name]
@@ -1860,7 +1935,19 @@ class ONDEClassInstanceWrapper(object):
         pass
                 
 """                
-        
+
+    def _repr_short(self, onde_class = None):
+        our_proxy = object.__getattribute__(self,"_proxy")
+        our_obj = object.__getattribute__(self,"_obj")
+        _graph = object.__getattribute__(self,"_graph")
+
+        if our_proxy is not None:
+            our_obj = our_proxy._get_obj()
+            _graph = our_proxy._graph
+            pass
+
+        return "InstanceWrapper of " + our_obj._repr_short()
+    
     def _repr(self, indentation, onde_class=None, extra_attrs={}):
         our_proxy = object.__getattribute__(self,"_proxy")
         our_obj = object.__getattribute__(self,"_obj")
@@ -1871,7 +1958,7 @@ class ONDEClassInstanceWrapper(object):
             _graph = our_proxy._graph
             pass
 
-        classdefs = _graph._class_defs
+        classdefs = _graph.class_defs
         if classdefs is not None:
 
             if isinstance(our_obj, ONDEObject):
@@ -1902,11 +1989,11 @@ class ONDEClassInstanceWrapper(object):
 
     @classmethod
     def new_obj(cls, graph, onde_classname, **kwargs):
-        if graph._class_defs is None:
+        if graph.class_defs is None:
             raise ValueError("Graph does not have class definitions loaded")
         
-        onde_class = graph._class_defs.classes[onde_classname]
-        obj = ONDEObject.new(ONDE_TYPE=onde_class.class_derivation, **kwargs)
+        onde_class = graph.class_defs.classes[onde_classname]
+        obj = ONDEObject.new(ONDE_TYPE = ONDEArray.new(onde_class.class_derivation, _frozen = True), **kwargs)
         # proxy = ONDEProxy(_path=None)
 
         return cls(_graph=graph,_obj=obj)
@@ -1917,7 +2004,7 @@ class ONDEClassInstanceWrapper(object):
             raise ValueError(f"Given object is of type {obj.__class__.__name__:s} and is not an ONDEBase instance")
 
         # onde_classname = object.__getattribute__(_orig, "ONDE_TYPE")
-        if graph._class_defs is None:
+        if graph.class_defs is None:
             raise ValueError("Graph does not have class definitions loaded")
         return cls(_graph=graph,_obj=obj)
         
@@ -1929,7 +2016,10 @@ class ONDEClassDefinitions(object):
     classes = None # Dictionary by name of ONDEClass
     acc_classes = None # Dictionary by name of accessory classes
     file_type = None # From the size_or_content of the blank ONDE:TYPE entry at the top of the csv file
+    version = None # VERSION specification from the .csv file
 
+
+    
     field_cache = None #dictionary by (tuple_of_class_derivation, frozen_set_of_accessory_classes) of a dictionary by field names and field name abbreviations of ONDEField objects
     
     def __init__(self):
@@ -1977,7 +2067,7 @@ class ONDEClassDefinitions(object):
                     continue
                 if key in shorthand_fields_dict:
                     # key already present
-                    if shorthand_fields_dict[key].class_prefix==shorthand_fields_dict[fieldname].class_prefix and shorthand_fields_dict[key].name==shorthand_fields_dict[fieldname].key:
+                    if shorthand_fields_dict[key].class_prefix==full_fields_dict[fieldname].class_prefix and shorthand_fields_dict[key].name==full_fields_dict[fieldname].name:
                         # Override of a shorthand for the same thing already present. This is allowable.
                         shorthand_fields_dict[key]=full_fields_dict[fieldname]
                         combined_fields_dict[key]=full_fields_dict[fieldname]
@@ -2100,7 +2190,7 @@ class ONDEClassDefinitions(object):
                     continue
 
                 if classname == "" and name == "ONDE:VERSION":
-                    # to do: store version
+                    class_defs.VERSION=size_or_content
                     continue
 
                 if classname == "" and name == "ONDE:FILETYPE":
@@ -2506,7 +2596,7 @@ class ONDEProxy(object):
 
         else:
             graph = object.__getattribute__(self, "_graph")
-            snap = graph._latest_snap
+            snap = graph.latest_snap
             pass
 
         _path = object.__getattribute__(self, "_path")
@@ -2570,7 +2660,7 @@ class ONDEProxy(object):
 
     def _get_item(self, key):
         obj = self._get_obj()
-        item_obj = obj._get_item(name)
+        item_obj = obj._get_item(key)
 
         if isinstance(item_obj, ONDEBase):
             return self.__class__.new_from_proxy(self, key)
@@ -2581,6 +2671,12 @@ class ONDEProxy(object):
         self._set_attr_or_item_or_data('_set_item', index, value)
         pass
 
+    def __getitem__(self,index):
+        return self._get_item(index)
+
+    def __setitem__(self,index,value):
+        return self._set_item(index,value)
+    
     def _get_data(self, name):
         obj = self._get_obj()
         data_obj = obj._get_data(name)
@@ -2655,7 +2751,13 @@ class ONDEProxy(object):
             #if new: # We could avoid the replacement for preexisting modifications if we knew that the scope of the previous modification matched our scope.
             if new or scope not in obj._modification_scopes:
                 replacement._modification_scopes.add(scope)
-                graph_replace_node(_trans, scope,path, obj, replacement)
+                if len(path) > 0:
+                    graph_replace_node(_trans, scope, path, obj, replacement)
+                    pass
+                else:
+                    assert(obj is _trans.snap and replacement is _trans.snap)
+                    pass
+                
                 pass
 
             pass
@@ -2685,6 +2787,181 @@ class ONDEProxy(object):
     def __repr__(self):
         return f"Writable proxy of {repr(self._get_obj()):s}"
     pass
+
+class ONDEFile(object):
+    """Represents an HDF5 file that may contain ONDE objects. Unlike most other data structures it is not thread safe (only one thread at a time should be manipulating an ONDEFile). However it is safe for multiple threads to simultaneously access and even modify (by the usual ONDEProxy methods) objects from a single file, so long as only a single thread attempts to write any changes to disk."""
+    file_object_dict = None # Dictionary by frozen ONDEBase object of ONDEFileObject.
+    class_defs = None # ONDEClassDefinitions object
+    h5path = None # file path used
+    mode = None # mode used to open the file
+    fh = None # h5py file handle.
+    graph = None # ONDEFileGraph object (or subclass)
+    db_maxidx = None # integer representing the highest index used in the PyONDE_DB hdf5 group
+    
+    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None):
+        self.class_defs = class_defs
+        self.h5path = h5path
+        self.mode = mode
+        self.fh = fh
+
+        self.file_object_dict = {}
+        self.graph = ONDEFileGraph(class_defs = self.class_defs)
+
+        if self.mode not in {"r","r+","w","w-","x","a"}:
+            raise ValueError(f"Unknown mode: {self.mode:s}")
+        
+        if self.mode == "r+" or self.mode == "a":
+            self.load() # Attempt to read in current contents.
+            pass
+
+        pass
+
+    def __getitem__(self,index):
+        return self.graph._get_item(index)
+
+    def __setitem__(self,index,value):
+        return self.graph._set_item(index,value)
+    
+    def load(self):
+        raise NotImplementedError()
+
+    def flush(self):
+        snap = self.graph.latest_snap
+
+        # Ensure ONDE:FILETYPE and ONDE:VERSION are present
+        if "ONDE:VERSION" not in self.fh.attrs:
+            self.fh.attrs["ONDE:VERSION"] = self.class_defs.VERSION
+            pass
+
+        if "ONDE:FILETYPE" not in self.fh.attrs:
+            self.fh["ONDE:FILETYPE"] = "ONDE_UT"
+            pass
+
+        # Make sure PyONDE_DB HDF5 group exists.
+        if not "PyONDE_DB" in self.fh:
+            self.fh.create_group("PyONDE_DB")
+            self.db_maxidx = 0
+            pass
+
+        db=self.fh["PyONDE_DB"]
+        db_path = db.name
+
+        present_objs = set(self.file_object_dict.keys()) # set of ONDEBase objects already present in the file
+        needed_objs = collections.OrderedDict()
+        _traverse_snapshot_fileneeded_objs(self.class_defs,snap,False,needed_objs) # this function will fill needed_objs with an ordered set (implemented as keys of an ordered dictionary) of ONDEBase objects that are needed in the file. The ordering is depth-first so that leaf nodes get included prior to branch nodes that reference them. The False parameter indicates that the snap itself does NOT get included.
+
+        needed_objs_set = set(needed_objs.keys())
+        # We need to remove objects that are listed in present_objs but not needed_objs
+        to_remove = present_objs.difference(needed_objs_set)
+
+        # We need to add objects that are listed in needed_objs but not present_objs
+        to_add = needed_objs_set.difference(present_objs)
+
+        # Perform the removal
+        for obj in to_remove:
+            fileobj = self.file_object_dict[obj]
+
+            #if fileobj.hdf5_attrname is not None:
+            #    # Object is stored as an attribute ... unnecessary becuase attributes will be written as part of their parent object.
+            #    attr_parent = self.fh[fileobj.hdf5_path]
+            #    del attr_parent[fileobj.hdf5_attrname]
+            #    pass
+            #else:
+            hdf5_obj=self.fh[fileobj.hdf5_path]
+            hdf5_parent = hdf5_obj.parent
+            del hdf5_parent[posixpath.basename(hdf5_obj.name)]
+            
+
+            fileobj.close()
+            del self.file_object_dict[obj]
+            pass
+        
+
+        # add in the needed objects. Loop ordering is because needed_objs is actually an OrderedDict.
+        for needed_obj in needed_objs:
+            if not needed_obj in to_add:
+                continue
+
+            obj_name = f"{self.db_maxidx + 1:5.5d}"
+            self.db_maxidx += 1
+
+            fileobj = ONDEFileObject(onde_instance = needed_obj,hdf5_path = posixpath.join(db_path,obj_name))
+
+            needed_obj._hdf5_write(onde_file = self,parent = db,parent_path = db_path,name = obj_name,onde_fileobj = fileobj)
+            pass
+        
+                                    
+        self.fh.flush()
+        pass
+
+
+    
+    def close(self):
+
+        if self.mode in {"r+","w","w-","x","a"}:
+            self.flush()
+            pass
+        
+        self.fh.close()
+        for key in self.file_object_dict:
+            self.file_object_dict[key].close()
+            pass
+        self.file_object_dict = None
+        self.fh = None
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, tb):
+        self.close()
+        return False
+
+    @classmethod
+    def new(cls, h5path, mode, class_defs_path=None):
+        fh = h5py.File(h5path, mode)
+        class_defs = None
+        if class_defs_path is not None:
+            class_defs = ONDEClassDefinitions.load_from_csv(class_defs_path)
+            pass
+        
+        return cls(class_defs = class_defs, h5path = h5path, mode = mode, fh = fh)
+    
+    pass
+
+class ONDEDatasetFile(ONDEFile):
+    """Represents an ONDE 1.0 file that is expected to contain one or more ONDE_DATASET instances."""
+    pass
+
+class ONDEFileObject(object):
+    """Represents a frozen ONDEBase subclass instance that is represented in an HDF5 file."""
+    onde_instance = None # Reference to an ONDEBase subclass instance.
+    hdf5_path = None # Path of the given object in the file.
+    #hdf5_attrname = None # If this FileObject is stored as an attribute, then 3this is the attribute name. Unnecessary because attributes will be written as part of their parent object.
+    # hdf5_obj = None # Actual h5py object.
+
+    def __init__(self, onde_instance = None, hdf5_path = None): #, hdf5_obj = None):
+        self.onde_instance = onde_instance
+        self.hdf5_path = hdf5_path
+        #self.hdf5_obj = hdf5_obj
+
+        with self.onde_instance._file_realizations_lock:
+            self.onde_instance._file_realizations.add(self)
+            pass
+        
+        pass
+
+    def close(self):
+        self.hdf5_path = None
+        #self.hdf5_obj = None
+
+        with self.onde_instance._file_realizations_lock:
+            self.onde_instance._file_realizations.remove(self)
+            pass
+        self.onde_instance = None
+        pass
+    pass
+
 
 
 # rough api of transactions
