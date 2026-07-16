@@ -15,4 +15,7 @@ of = onde.ONDEDatasetFile.new(output_path, "w",
 ds = of.graph.new_obj("ONDE_DATASET_UT_ASCAN")
 ds.LABEL = "First dataset"
 ds.SETUP=of.graph.new_obj("ONDE_SETUP_UT")
+ds.SETUP.GEOMETRIC_SETUP=of.graph.new_obj("ONDE_GEOMETRIC_SETUP")
 of.graph["ds"] = ds
+of.flush()
+of.close()

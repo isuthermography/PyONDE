@@ -8,6 +8,7 @@ import h5py
 import sys
 import os
 import os.path
+import posixpath
 import threading
 import ast
 import csv
@@ -304,6 +305,14 @@ class TwoWayArray(object):
                 
         pass
 
+    @property
+    def byindex(self):
+        """Return safe copy of underlying array"""
+        with self._lock:
+            byindex = copy.copy(self._byindex)
+            pass
+        return byindex
+    
     def __iter__(self):
         return np.nditer(self._byindex,flags=("multi_index","refs_ok")) # Just use iterator of underlying array
 
@@ -626,7 +635,7 @@ class ONDEBase(object):
             del kwargs["_referencedby"]
             pass
         if "_file_realizations" in kwargs:
-            _file_relaizations = set(kwargs["_file_realizations"])
+            _file_realizations = set(kwargs["_file_realizations"])
             del kwargs["_file_realizations"]
             pass
         
@@ -659,7 +668,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_get_data","_set_data","_get_item","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -679,6 +688,13 @@ class ONDEBase(object):
 
         raise ValueError("ONDEBase does not have attributes")
 
+    def _get_attr_dataset_storage(self, name):
+        """
+        Return the named conceptual attribute of an ONDE object.
+        """
+
+        raise ValueError("ONDEBase does not have attributes")
+
     def _has_attr(self, name):
         """
         Return whether the named conceptual attribute of an ONDE object exists.
@@ -687,6 +703,13 @@ class ONDEBase(object):
         return False
     
     def _set_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object.
+        """
+
+        raise ValueError("ONDEBase does not have attributes")
+
+    def _set_dataset_attr(self, name, value):
         """
         Set the named conceptual attribute of an ONDE object.
         """
@@ -715,7 +738,21 @@ class ONDEBase(object):
         """
         raise ValueError("ONDEBase does not have data")
 
-   
+    def _hdf5_write_group(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 group
+        """
+        raise ValueError("ONDEBase does not have content to write")
+
+    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 dataset
+        """
+        raise ValueError("ONDEBase does not have content to write")
+
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 attribute
+        """
+        raise ValueError("ONDEBase does not have content to write")
+
         
 
     
@@ -855,7 +892,17 @@ class ONDEValue(ONDEBase):
                            type=type(object.__getattribute__(self, 'value')).__name__,
                            value=str(object.__getattribute__(self, 'value')),
                            **extra_attrs)
+
+
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 attribute
+        """
+        parent.attrs[name] = self.value
+        pass
+    
         
+
+    
     @classmethod
     def new(cls, value = None, **kwargs):
         return cls(None, value = value, **kwargs)
@@ -870,30 +917,34 @@ class ONDEArray(ONDEBase):
 
     An ONDEArray can be stored either as an HDF5
     attribute or an HDF5 dataset depending on the
-    value of the store_as_dataset boolean.
-
+    status in the parent object and whether the attribute of the parent is set to be stored as a dataset
     """
     value = None # numpy array
-    store_as_dataset = None # boolean; store as an HDF5 dataset if True, otherwise and an HDF5 attribute
+    #store_as_dataset = None # boolean; store as an HDF5 dataset if True, otherwise and an HDF5 attribute
     
     def __init__(self, _orig = None, **kwargs):
-        store_as_dataset = False
+        #store_as_dataset = False
         
         if _orig is not None:
             value = _orig.value
-            store_as_dataset = _orig.store_as_dataset
+            #store_as_dataset = _orig.store_as_dataset
             pass
 
         
-        if "store_as_dataset" in kwargs:
-            store_as_dataset = bool(kwargs["store_as_dataset"])
-            del kwargs["store_as_dataset"]
-            pass
+        #if "store_as_dataset" in kwargs:
+        #    store_as_dataset = bool(kwargs["store_as_dataset"])
+        #    del kwargs["store_as_dataset"]
+        #    pass
         
         if "value" in kwargs:
             value = copy.copy(kwargs["value"])
             if isinstance(value, collections.abc.Sequence):
-                value = np.array(value)
+                dtype = None
+                if len(value) > 0 and isinstance(value[0],str):
+                    # For collection of strings, use h5py string datatype for numpy
+                    dtype = h5py.string_dtype()
+                    pass
+                value = np.array(value,dtype=dtype)
                 pass
             elif isinstance(value, np.ndarray):
                 # value.flags.writeable = False
@@ -902,13 +953,13 @@ class ONDEArray(ONDEBase):
                 raise ValueError(f"ONDEArray: Cannot understand value type {value.__class__.__name__:s}")
             del kwargs["value"]
             pass
-        self.store_as_dataset = store_as_dataset
+        #self.store_as_dataset = store_as_dataset
         self.value = value
         super().__init__(_orig, **kwargs)
         pass
 
     def __getattribute__(self,name):
-        if name == "value" or name == "store_as_dataset":
+        if name == "value":# or name == "store_as_dataset":
            
             _get_data = object.__getattribute__(self, "_get_data")
             return _get_data(name)
@@ -916,7 +967,7 @@ class ONDEArray(ONDEBase):
         return super().__getattribute__(name)
 
     def __setattr__(self,name,value):
-        if name == "value" or name == "store_as_dataset":
+        if name == "value": # or name == "store_as_dataset":
             self._set_data(name,value)
             pass
         else:
@@ -940,7 +991,7 @@ class ONDEArray(ONDEBase):
         Return the named conceptual attribute of an ONDE object.
         """
 
-        if name == "value" or name == "store_as_dataset":
+        if name == "value": # or name == "store_as_dataset":
             return object.__getattribute__(self, name)
 
         raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
@@ -952,10 +1003,10 @@ class ONDEArray(ONDEBase):
         if self._frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
 
-        if name == "value" or name == "store_as_dataset":
+        if name == "value": # or name == "store_as_dataset":
             return object.__setattr__(self, name, value)
 
-        raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
+        raise ValueError("ONDEArray does not have attributes other than \"value\"")
     
     def _freeze(self):
         self.value.flags.writeable = False
@@ -971,7 +1022,20 @@ class ONDEArray(ONDEBase):
                            type=str(object.__getattribute__(self, 'value').dtype),
                            shape=str(object.__getattribute__(self, 'value').shape),
                            **extra_attrs)
+
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 attribute
+        """
+        parent.attrs[name] = self.value
+        pass
     
+    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 dataset
+        """
+        ds = parent.create_dataset(name,data = self.value)
+
+        pass
+                         
     @classmethod
     def new(cls, value = None, **kwargs):
         return cls(None, value = value, **kwargs)
@@ -982,29 +1046,28 @@ class ONDEArray(ONDEBase):
 class ONDEReferenceArray(ONDEBase):
     """Represents an array of references to other ONDEObjects.
 
-    An ONDEReferenceArray can be stored either as an HDF5
-    attribute or an HDF5 dataset depending on the value
-    of the store_as_dataset boolean."""
+    An ONDEReferenceArray can be stored as an HDF5
+    attribute"""
     refs = None # TwoWayArray of ONDEBase references
-    store_as_dataset = None # True to store as an HDF5 dataset, False to store as an HDF5 attribute
+    #store_as_dataset = None # True to store as an HDF5 dataset, False to store as an HDF5 attribute
     
 
     def __init__(self,_orig, **kwargs):
         """Private constructor for internal use only.
         Use .new() classmethod or copy.copy()
         """
-        store_as_dataset = False
+        #store_as_dataset = False
         refs = None
         if _orig is not None:
             refs = _orig.refs
-            store_as_dataset = _orig.store_as_dataset
+            #store_as_dataset = _orig.store_as_dataset
             pass
 
         
-        if "store_as_dataset" in kwargs:
-            store_as_dataset = bool(kwargs["store_as_dataset"])
-            del kwargs["store_as_dataset"]
-            pass
+        #if "store_as_dataset" in kwargs:
+        #    store_as_dataset = bool(kwargs["store_as_dataset"])
+        #    del kwargs["store_as_dataset"]
+        #    pass
         
         shape = ()
 
@@ -1022,7 +1085,7 @@ class ONDEReferenceArray(ONDEBase):
             refs = TwoWayArray(shape=shape)
             pass
         
-        self.store_as_dataset = store_as_dataset
+        #self.store_as_dataset = store_as_dataset
         self.refs = refs
         super().__init__(_orig,**kwargs)
         pass
@@ -1039,20 +1102,20 @@ class ONDEReferenceArray(ONDEBase):
         Return the named conceptual data of an ONDE object.
         """
 
-        if name == "refs" or name == "store_as_dataset":
+        if name == "refs": # or name == "store_as_dataset":
             return object.__getattribute__(self, name)
 
-        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\" and \"store_as_dataset\"")
+        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\"")
     
     def _set_data(self, name, value):
         """
         Set the named conceptual data of an ONDE object.
         """
 
-        if name == "refs" or name == "store_as_dataset":
+        if name == "refs": # or name == "store_as_dataset":
             return object.__setattr__(self, name, value)
 
-        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\" and \"store_as_dataset\"")
+        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\"")
 
     def _get_item(self,index):
         return self.refs[index]
@@ -1130,6 +1193,45 @@ class ONDEReferenceArray(ONDEBase):
                            ID=f"{id(self):x}",
                            shape=str(object.__getattribute__(self, 'refs')._shape),
                            **extra_attrs)
+
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 attribute
+        """
+        ref_dtype = h5py.special_dtype(ref = h5py.Reference)
+
+        byindex = self.refs.byindex
+        h5_byindex = np.zeros(byindex.shape,dtype = ref_dtype)
+        nditer = np.nditer(byindex, flags = ("multi_index","refs_ok"))
+
+        for objarray in nditer:
+            obj = objarray[()]
+            if obj is not None:
+                # !!!*** This may need to be accelerated by caching the hdf5 object references per the various discussions on h5py indexing performance with Paul Wilcox, early 2026. https://github.com/COFREND/ONDE-format/issues/24
+                h5_byindex[nditer.multi_index] = onde_file.fh[onde_file.file_object_dict[obj].hdf5_path].ref
+                pass
+            pass
+        
+        parent.attrs[name] = h5_byindex
+        pass
+    
+    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 dataset
+        """
+        ref_dtype = h5py.special_dtype(ref = h5py.Reference)
+
+        byindex = self.refs.byindex
+        h5_byindex = np.zeros(byindex.shape,dtype = ref_dtype)
+        nditer = np.nditer(byindex, flags = ("multi_index","refs_ok"))
+
+        for objarray in nditer:
+            obj = objarray[()]
+            if obj is not None:
+                # !!!*** This may need to be accelerated by caching the hdf5 object references per the various discussions on h5py indexing performance with Paul Wilcox, early 2026. https://github.com/COFREND/ONDE-format/issues/24
+                h5_byindex[nditer.multi_index] = onde_file.fh[onde_file.file_object_dict[obj].hdf5_path].ref
+                pass
+            pass
+        ds = parent.create_dataset("name",data=h5_byindex)
+        pass
     
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
@@ -1142,7 +1244,8 @@ class ONDEObject(ONDEBase):
     """ONDEObject represents a (non-leaf) node in the graph
     that can point at other objects."""
     #ONDE_TYPE = None # List of classes starting with base class
-    _ONDE_attrs = None # TwoWayDictionary by name of attributes that should be ONDEBase (or subclass) objects
+    _ONDE_attrs = None # TwoWayDictionary by name of attributes that should be ONDEBase (or subclass) objects).
+    _ONDE_dataset_attrs = None # Sub-set of ONDE_attrs that should use hdf5 dataset (as opposed to hdf5 attribute) storage.
 
     def __init__(self, _orig, **kwargs):
         """Private constructor for internal use only.
@@ -1159,8 +1262,10 @@ class ONDEObject(ONDEBase):
         #    pass
 
         _ONDE_attrs = None
+        _ONDE_dataset_attrs = None
         if _orig is not None:
             _ONDE_attrs = object.__getattribute__(_orig, "_ONDE_attrs")
+            _ONDE_dataset_attrs = object.__getattribute__(_orig,"_ONDE_dataset_attrs")
             pass
         if "_ONDE_attrs" in kwargs:
             #if _ONDE_attrs is not None:
@@ -1171,7 +1276,11 @@ class ONDEObject(ONDEBase):
             #    pass
             del kwargs["_ONDE_attrs"]
             pass
-        
+
+        if "_ONDE_dataset_attrs" in kwargs:
+            _ONDE_dataset_attrs = kwargs["_ONDE_dataset_attrs"]
+            del kwargs["_ONDE_dataset_attrs"]
+            pass
         
         #object.__setattr__(self, "ONDE_TYPE", tuple(ONDE_TYPE))
         ONDE_attrs = TwoWayDictionary(_ONDE_attrs)
@@ -1181,6 +1290,12 @@ class ONDEObject(ONDEBase):
         
         object.__setattr__(self, "_ONDE_attrs", ONDE_attrs)
 
+        if _ONDE_dataset_attrs is None :
+            _ONDE_dataset_attrs = set()
+            pass
+        ONDE_dataset_attrs = set(_ONDE_dataset_attrs)
+        object.__setattr__(self,"_ONDE_dataset_attrs",ONDE_dataset_attrs)
+        
         base_kwargs = {}
         for kwarg in kwargs:
             if kwarg.startswith("_"):
@@ -1195,7 +1310,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr", "_set_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs", "_has_attr","_repr","_repr_short"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1225,6 +1340,18 @@ class ONDEObject(ONDEBase):
 
         return _ONDE_attrs._get_attr(name)
 
+    def _get_attr_dataset_storage(self, name):
+        """
+        Return whether the named conceptual attribute of an ONDE object uses hdf5 dataset storage.
+        """
+        
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _ONDE_dataset_attrs = object.__getattribute__(self, "_ONDE_dataset_attrs")
+
+        return name in _ONDE_dataset_attrs
+
     def _has_attr(self, name):
         """
         Return whether the named conceptual attribute of an ONDE object exists.
@@ -1236,18 +1363,38 @@ class ONDEObject(ONDEBase):
     
     def _set_attr(self, name, value):
         """
-        Set the named conceptual attribute of an ONDE object.
+        Set the named conceptual attribute of an ONDE object. Use _set_dataset_attr() instead if the attribute should have hdf5 dataset storage.
         """
 
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
 
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
-
+        _ONDE_dataset_attrs = object.__getattribute__(self, "_ONDE_dataset_attrs")
+        
         if isinstance(value, ONDEClassInstanceWrapper) or isinstance(value, ONDEProxy):
             value = value._get_obj()
             pass
+
+        _ONDE_dataset_attrs.discard(name)
+        return _ONDE_attrs._set_attr(name, value)
+
+    def _set_dataset_attr(self, name, value):
+        """
+        Set the named conceptual attribute of an ONDE object with dataset storage. Use _set_attr() instead if the attribute should have hdf5 attribute storage.
+        """
+
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        _ONDE_dataset_attrs = object.__getattribute__(self, "_ONDE_dataset_attrs")
         
+        if isinstance(value, ONDEClassInstanceWrapper) or isinstance(value, ONDEProxy):
+            value = value._get_obj()
+            pass
+
+        _ONDE_dataset_attrs.add(name)
         return _ONDE_attrs._set_attr(name, value)
 
     def _list_attrs(self):
@@ -1322,17 +1469,45 @@ class ONDEObject(ONDEBase):
         new_extra_attrs=collections.OrderedDict()
         if onde_class is None:
             _ONDE_attrs=object.__getattribute__(self, '_ONDE_attrs')
+            _ONDE_dataset_attrs = object.__getattribute__(self, "_ONDE_dataset_attrs")
             for attrname in _ONDE_attrs._keys():
-                new_extra_attrs[attrname]=object.__getattribute__(_ONDE_attrs[attrname], "_repr_short")()
+                storage_suffix = ""
+                if attrname in _ONDE_dataset_attrs:
+                    storage_suffix = " (hdf5 dataset storage)"
+                    pass
+                
+                new_extra_attrs[attrname]=object.__getattribute__(_ONDE_attrs[attrname], "_repr_short")() + storage_suffix
                 pass
             pass
         new_extra_attrs.update(extra_attrs)
         return repr_helper(indentation, myclass,
                            ID=f"{id(self):x}",
                            **new_extra_attrs)
+
+    def _hdf5_write_group(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write this object to a new hdf5 group
+        """
+        gr = parent.create_group(name)
+        for attrname in self._ONDE_attrs:
+            value = self._ONDE_attrs[attrname]
+            if attrname in self._ONDE_dataset_attrs:
+                value._hdf5_write_dataset(onde_file,gr,gr.name,attrname,None)
+                pass
+            else:
+                value._hdf5_write_attribute(onde_file,gr,gr.name,attrname,None)
+                pass
+            pass
+        
+        pass
+    
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+        """Write a reference to this object to a new hdf5 attribute
+        """
+        parent.attrs[name] = onde_file.fh[onde_file.file_object_dict[self].hdf5_path].ref
+        pass
     
     @classmethod
-    def new(cls, ONDE_TYPE = None, _ONDE_attrs = None, **kwargs):
+    def new(cls, ONDE_TYPE = None, _ONDE_attrs = None,_ONDE_dataset_attrs = None, **kwargs):
         """Main constructor to call"""
         constructargs = {}
         if ONDE_TYPE is not None:
@@ -1341,6 +1516,10 @@ class ONDEObject(ONDEBase):
         if _ONDE_attrs is not None:
             constructargs["_ONDE_attrs"] = _ONDE_attrs
             pass
+        if _ONDE_dataset_attrs is not None:
+            constructargs["_ONDE_dataset_attrs"] = _ONDE_dataset_attrs
+            pass
+        
         constructargs.update(kwargs)
         newobj = cls(None, **constructargs)
         #for attrname in kwargs:
@@ -1583,7 +1762,7 @@ class ONDEClassInstanceWrapper(object):
 
             if isinstance(value,ONDEObject) or isinstance(value,ONDEReferenceArray):
                 
-                value_wrapper = self.__class__.new_from_obj(cls,_graph,value)
+                value_wrapper = self.__class__.new_from_obj(_graph,value)
                 return value_wrapper
             else:
                 
@@ -1593,7 +1772,12 @@ class ONDEClassInstanceWrapper(object):
 
     def _get_attr(self,name):
         return self._get_attr_or_item("_get_attr",name)
-            
+
+
+    def _get_attr_dataset_storage(self,name):
+        obj = self._get_obj()
+        return obj._get_attr_dataset_storage(name)
+    
     def _set_attr_or_item(self,set_method_name,key,value):
         our_proxy = object.__getattribute__(self,"_proxy")
         our_obj = object.__getattribute__(self,"_obj")
@@ -1606,10 +1790,17 @@ class ONDEClassInstanceWrapper(object):
         
         full_name = key
         field = None
-        if set_method_name == "_set_attr":
+        if set_method_name == "_set_attr" or set_method_name == "_set_dataset_attr":
             (full_name, field) = self._full_fieldname_from_attrname(_graph, our_obj, key)       
             if full_name is None:
                 full_name = key
+                pass
+            pass
+
+        if field is not None and set_method_name == "_set_attr":
+            # For now, if field.storage is "A or D", we always just store it as a dataset.
+            if field.storage != "A":
+                set_method_name = "_set_dataset_attr"
                 pass
             pass
         
@@ -1684,6 +1875,10 @@ class ONDEClassInstanceWrapper(object):
     
     def _set_attr(self,name,value):
         self._set_attr_or_item("_set_attr",name,value)
+        pass
+
+    def _set_dataset_attr(self,name,value):
+        self._set_attr_or_item("_set_dataset_attr",name,value)
         pass
 
     def _get_item(self,index):
@@ -1966,8 +2161,14 @@ class ONDEClassInstanceWrapper(object):
                 attrdict=collections.OrderedDict()
                 for attrname in sorted(list(concise_set)):
                     attrval = self._get_attr(attrname)
+                    dataset_storage = self._get_attr_dataset_storage(attrname)
+                    storage_suffix = ""
+                    if dataset_storage:
+                        storage_suffix = " (hdf5 dataset storage)"
+                        pass
+                    
                     if attrval is not None:
-                        attrdict[attrname] = attrval._repr_short()
+                        attrdict[attrname] = attrval._repr_short() + storage_suffix
                         pass
                     else:
                         attrdict[attrname] = "None"
@@ -2604,7 +2805,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr", "_get_attr","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -2649,6 +2850,11 @@ class ONDEProxy(object):
 
         #return attr_obj
         
+    def _get_attr_dataset_storage(self, name):
+        obj = self._get_obj()
+        return obj._get_attr_dataset_storage(name)
+
+        
     def _has_attr(self, name):
         obj = self._get_obj()
         return obj._has_attr(name)
@@ -2657,6 +2863,11 @@ class ONDEProxy(object):
     def _set_attr(self, name, value):
         self._set_attr_or_item_or_data('_set_attr', name, value)
         pass
+
+    def _set_dataset_attr(self, name, value):
+        self._set_attr_or_item_or_data('_set_dataset_attr', name, value)
+        pass
+    
 
     def _get_item(self, key):
         obj = self._get_obj()
@@ -2689,7 +2900,7 @@ class ONDEProxy(object):
     
     
     def _set_attr_or_item_or_data(self, set_method_name, key, value):
-        ''' Use the named set method (_set_attr, _set_item, or  _set_data) to assign the element specified by key to the given value'''
+        ''' Use the named set method (_set_attr,_set_dataset_attr, _set_item, or  _set_data) to assign the element specified by key to the given value'''
         
         _trans = object.__getattribute__(self, "_trans")
         #import pdb
@@ -2788,6 +2999,24 @@ class ONDEProxy(object):
         return f"Writable proxy of {repr(self._get_obj()):s}"
     pass
 
+
+def _traverse_snapshot_fileneeded_objs(class_defs,cur_obj,add_cur_to_needed,needed_objs):
+    """Traverse the graph of ONDEBase objects depth-first starting at cur_obj, accumulating ONDEObjects that will need to be written into the file into the ordered dictionary needed_objs. It is an ordered dictionary because we will use its ordering for the object creation so that objects are created before they are used. The values stored into the ordered dictionary are all None."""
+    edges = cur_obj._list_edges()
+
+    for edge in edges:
+        sub_obj = cur_obj._follow_path((edge,))
+        if sub_obj in needed_objs:
+            continue # sub_obj has already been processed 
+        sub_is_needed = type(sub_obj) is ONDEObject
+        _traverse_snapshot_fileneeded_objs(class_defs,sub_obj,sub_is_needed,needed_objs)
+        pass
+
+    if add_cur_to_needed:
+        needed_objs[cur_obj] = None
+        pass
+    pass
+
 class ONDEFile(object):
     """Represents an HDF5 file that may contain ONDE objects. Unlike most other data structures it is not thread safe (only one thread at a time should be manipulating an ONDEFile). However it is safe for multiple threads to simultaneously access and even modify (by the usual ONDEProxy methods) objects from a single file, so long as only a single thread attempts to write any changes to disk."""
     file_object_dict = None # Dictionary by frozen ONDEBase object of ONDEFileObject.
@@ -2834,7 +3063,7 @@ class ONDEFile(object):
             pass
 
         if "ONDE:FILETYPE" not in self.fh.attrs:
-            self.fh["ONDE:FILETYPE"] = "ONDE_UT"
+            self.fh.attrs["ONDE:FILETYPE"] = "ONDE_UT"
             pass
 
         # Make sure PyONDE_DB HDF5 group exists.
@@ -2882,12 +3111,15 @@ class ONDEFile(object):
             if not needed_obj in to_add:
                 continue
 
-            obj_name = f"{self.db_maxidx + 1:5.5d}"
+            obj_name = f"{self.db_maxidx + 1:05d}"
             self.db_maxidx += 1
 
             fileobj = ONDEFileObject(onde_instance = needed_obj,hdf5_path = posixpath.join(db_path,obj_name))
 
-            needed_obj._hdf5_write(onde_file = self,parent = db,parent_path = db_path,name = obj_name,onde_fileobj = fileobj)
+            needed_obj._hdf5_write_group(onde_file = self,parent = db,parent_path = db_path,name = obj_name,onde_fileobj = fileobj)
+
+            self.file_object_dict[needed_obj] = fileobj
+        
             pass
         
                                     
