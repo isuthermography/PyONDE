@@ -1,8 +1,5 @@
 # Road map:
-# * add onde datasetfile abstraction
-# * add onde file object abstraction representing a finalized ondebase object contained within a file, with references to the object as well as the hdf5 path within the file
-# * each ondebase object has a mutable set of onde file objects that reference it. 
-# * This set will need to be protected by a lock
+# *Need to implement _del_attr and _del_item on various classes.
 
 import h5py
 import sys
@@ -182,7 +179,7 @@ class TwoWayDictionary(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_set_attr", "_get_attr", "_keys"}:
+            if name in {"_freeze", "_frozen", "_set_attr", "_get_attr", "_keys","_del_attr"}:
                 return object.__getattribute__(self, name)
             raise IndexError("TwoWayDictionary: Indexes are not allowed to have leading underscores")
 
@@ -236,6 +233,24 @@ class TwoWayDictionary(object):
             pass
         pass
 
+    def _del_attr(self,name):
+        _bystrings = object.__getattribute__(self, "_bystrings")
+        _byobjid = object.__getattribute__(self, "_byobjid")
+        _lock = object.__getattribute__(self, "_lock")
+        _frozen = object.__getattribute__(self, "_frozen")
+
+        if _frozen:
+            raise AttributeError("Not allowed to modify a frozen TwoWayDictionary")
+        with _lock:
+            if name in _bystrings:
+                # Remove old back-reference
+                oldobj = _bystrings[name]
+                _byobjid[id(oldobj)] = _byobjid[id(oldobj)] - frozenset({name})
+                pass
+            del _bystrings[name]
+            pass
+        pass
+    
     def _get_attr(self, name):
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
@@ -246,6 +261,9 @@ class TwoWayDictionary(object):
     def __getitem__(self,name):
 
         return self._get_attr(name)
+
+    def __delitem__(self,name):
+        return self._del_attr(name)
     
     def _freeze(self):
         object.__setattr__(self, "_frozen", True)
@@ -483,6 +501,11 @@ class ONDEFileGraph(object):
         snap_proxy._set_item(name,value)
 
         pass
+
+    def keys(self):
+        latest_snap = object.__getattribute__(self, "latest_snap")
+        return latest_snap._list_items()
+
    
     def new_obj(self,onde_classname,**kwargs):
         if self.class_defs is not None:
@@ -668,7 +691,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -726,6 +749,12 @@ class ONDEBase(object):
         """Set the indexed data element of an ONDE object.
         """
         raise ValueError("ONDEBase does not have items")
+    
+    def _list_items(self,index,value):
+        """List the data element indices of an ONDE object.
+        """
+        raise ValueError("ONDEBase does not have items")
+    
 
     # Data are lower level objects such as arrays of numbers, integers, strings, etc.
     def _get_data(self,name):
@@ -1236,6 +1265,20 @@ class ONDEReferenceArray(ONDEBase):
     @classmethod
     def new(cls, refs = None, shape = None, **kwargs):
         return cls(None, refs = refs, shape = shape, **kwargs)
+
+    @classmethod
+    def load_from_hdf5(cls,onde_file,fileobjs_by_h5path,h5_fh,np_h5ref_array):
+        refs  = np.zeros(np_h5ref_array.shape,dtype = "O")
+        nditer = np.nditer(np_h5ref_array, flags = ("multi_index","refs_ok"))
+
+        for refarray in nditer:
+            ref = refarray[()]
+            if ref is not None:
+                refs[nditer.multi_index] = ONDEObject.load_from_hdf5(ONDE_file,fileobjs_by_h5path,h5_fh,h5_fh[ref])
+                pass
+            pass
+        instance = cls(None,refs = refs, shape = np_h5ref_array.shape)
+        return instance
     
     pass
 
@@ -1284,8 +1327,8 @@ class ONDEObject(ONDEBase):
         
         #object.__setattr__(self, "ONDE_TYPE", tuple(ONDE_TYPE))
         ONDE_attrs = TwoWayDictionary(_ONDE_attrs)
-        if not "ONDE_TYPE" in ONDE_attrs:
-            ONDE_attrs["ONDE_TYPE"] = ()
+        if not "ONDE:TYPE" in ONDE_attrs:
+            ONDE_attrs["ONDE:TYPE"] = ()
             pass
         
         object.__setattr__(self, "_ONDE_attrs", ONDE_attrs)
@@ -1310,7 +1353,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1511,7 +1554,7 @@ class ONDEObject(ONDEBase):
         """Main constructor to call"""
         constructargs = {}
         if ONDE_TYPE is not None:
-            constructargs["ONDE_TYPE"] = ONDE_TYPE
+            constructargs["ONDE:TYPE"] = ONDE_TYPE
             pass
         if _ONDE_attrs is not None:
             constructargs["_ONDE_attrs"] = _ONDE_attrs
@@ -1526,14 +1569,89 @@ class ONDEObject(ONDEBase):
         #    setattr(newobj, attrname, kwargs[attrname])
         #    pass
         return newobj
+
+    @classmethod
+    def load_from_hdf5(cls,onde_file,fileobjs_by_h5path,h5_fh,h5_group):
+        _ONDE_attrs = collections.OrderedDict()
+        _ONDE_dataset_attrs = set()
+
+        if h5_group.name in fileobjs_by_h5path:
+            return fileobjs_by_h5path[h5_group.name].onde_instance
+        
+        for attrname in h5_group.attrs:
+            h5_attr = h5_group.attrs[attrname]
+            if isinstance(h5_attr,str) or isinstance(h5_attr,int) or isinstance(h5_attr,float):
+                attr_obj = ONDEValue.new(h5_attr)
+                _ONDE_attrs[attrname] = attr_obj
+                pass
+
+            elif isinstance(h5_attr,np.ndarray):
+                string_info = h5py.check_string_dtype(h5_attr.dtype)
+                if string_info is not None:
+                    # array of strings
+                    pass
+
+                # Check if hdf5 reference
+                ref_type = h5py.check_dtype(ref = h5_attr.dtype)
+                if ref_type is not None:
+                    # array of references
+                    
+                    attr_obj = ONDEReferenceArray.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,h5_attr)
+                    _ONDE_attrs[attrname] = attr_obj
+                    pass
+                else:
+                    # Array of values
+                    attr_obj = ONDEArray.new(value = h5_attr)
+                    _ONDE_attrs[attrname] = attr_obj
+                    pass
+                pass
+            elif isinstance(h5_attr,h5py.Reference):
+                attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, h5_fh[h5_attr])
+                _ONDE_attrs[attrname] = attr_obj
+           
+                pass
+            else:
+                raise ValueError(f"Unknown hdf5 attribute type: {type(h5_attr).__name__:s}")
+            pass
+        for (subname,subobj) in h5_group.items():
+            if isinstance(subobj,h5py.Dataset):
+                # Check if hdf5 reference
+                ref_type = h5py.check_dtype(ref = subobj.data.dtype)
+                if ref_type is not None:
+                    # array of references
+                    
+                    attr_obj = ONDEReferenceArray.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,subobj.data)
+                    _ONDE_attrs[subname] = attr_obj
+                    _ONDE_dataset_attrs.add(subname)
+                    pass
+                else:
+                    # Array of values
+                    attr_obj = ONDEArray.new(value = subobj.data)
+                    _ONDE_attrs[subname] = attr_obj
+                    _ONDE_dataset_attrs.add(subname)
+                    pass
+                pass
+            # elif isinstance(subobj,h5py.Group): # These lines will enable support for hierarchical ONDE files
+            #     attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, subobj)
+            #     _ONDE_attrs[subname] = attr_obj
+            else:
+                raise ValueError(f"Unknown h5type {type(subobj).__name__:s} at hdf5 path {h5_group.name:s}")
+            pass
+        instance = cls(None,_ONDE_attrs = _ONDE_attrs,_ONDE_dataset_attrs = _ONDE_dataset_attrs)
+        fileobj = ONDEFileObject(onde_instance = instance,hdf5_path = h5_group.name)
+        fileobjs_by_h5path[h5_group.name] = fileobj
+        return instance
     pass
 
 class ONDEFileGraphSnapshot(ONDEObject):
     """ Not allowed to be referenced by any other ONDEObject.
-    The ONDE_TYPE field should be empty.
+    The ONDE:TYPE field should be absent.
     Attributes represent entry points of the graph."""
     def __init__(self, _orig = None, **kwargs):
         super().__init__(_orig, **kwargs)
+        # remove the ONDE:TYPE added by the ONDEObject constructor because we are not really a proper object
+        _ONDE_attrs = object.__getattribute__(self,"_ONDE_attrs")
+        del _ONDE_attrs["ONDE:TYPE"]
         pass
 
     # Unlike ONDEObject, we index with _get_item, not with
@@ -1558,6 +1676,11 @@ class ONDEFileGraphSnapshot(ONDEObject):
     def __setitem__(self,index,value):
         return self._set_item(index,value)
     
+    def _list_items(self):
+        return ONDEObject._list_attrs(self)
+
+    def keys(self):
+        return self._list_items()
     
     #@classmethod
     #def new(cls, entry_points = None):
@@ -1572,7 +1695,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
             _frozen = kwargs["_frozen"]
             del kwargs["_frozen"]
             pass
-        newobj = cls(None, ONDE_TYPE = ONDEArray.new([],_frozen = True))
+        newobj = cls(None)
         for attrname in kwargs:
             newobj._set_item(attrname, kwargs[attrname])
             pass
@@ -1710,7 +1833,7 @@ class ONDEClassInstanceWrapper(object):
         
         if isinstance(obj,ONDEObject):
             classdefs = _graph.class_defs
-            if attrname=="ONDE_TYPE":
+            if attrname=="ONDE:TYPE":
                 return (attrname, None)
             (shorthand_fields_dict,full_fields_dict,combined_fields_dict,concise_set) = classdefs.get_fields_dict(obj)
             if attrname in combined_fields_dict:
@@ -1718,7 +1841,7 @@ class ONDEClassInstanceWrapper(object):
                 full_name = field.class_prefix + ":" + field.name
                 return (full_name, field)
             else:
-                # raise NameError(f"Unknown attribute {attrname:s} on ONDEObject of type {obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s}.")
+                # raise NameError(f"Unknown attribute {attrname:s} on ONDEObject of type {obj._ONDE_attrs['ONDE:TYPE'].value[-1]:s}.")
                 return (None, None)
             pass
         return (attrname, None)
@@ -2174,7 +2297,7 @@ class ONDEClassInstanceWrapper(object):
                         attrdict[attrname] = "None"
                         pass
                     pass
-                return our_obj._repr(indentation,onde_class = f"InstanceWrapper({our_obj._ONDE_attrs['ONDE_TYPE'].value[-1]:s})", extra_attrs = attrdict)
+                return our_obj._repr(indentation,onde_class = f"InstanceWrapper({our_obj._ONDE_attrs['ONDE:TYPE'].value[-1]:s})", extra_attrs = attrdict)
             pass
         return our_obj._repr(indentation)
         
@@ -2204,7 +2327,7 @@ class ONDEClassInstanceWrapper(object):
         if not isinstance(obj,ONDEBase):
             raise ValueError(f"Given object is of type {obj.__class__.__name__:s} and is not an ONDEBase instance")
 
-        # onde_classname = object.__getattribute__(_orig, "ONDE_TYPE")
+        # onde_classname = object.__getattribute__(_orig, "ONDE:TYPE")
         if graph.class_defs is None:
             raise ValueError("Graph does not have class definitions loaded")
         return cls(_graph=graph,_obj=obj)
@@ -2231,7 +2354,7 @@ class ONDEClassDefinitions(object):
     
     def get_fields_dict(self,obj):
         """returns three dictionaries by field name of ONDEField: the shorthand dictionary, the full dictionary, the combined dictionary, and the concise set. Automatically omits any shorthands that conflict with actual attributes. The concise set includes the shortest name for each field plus any fields which don't correspond to ONDEField objects""" 
-        onde_type_value = obj._ONDE_attrs["ONDE_TYPE"]
+        onde_type_value = obj._ONDE_attrs["ONDE:TYPE"]
         assert(isinstance(onde_type_value,ONDEArray))
         
         class_derivation = tuple([str(classname) for classname in onde_type_value.value])
@@ -2812,6 +2935,9 @@ class ONDEProxy(object):
                 return getattr(obj,name)
             raise ValueError(f"ONDEProxy: invalid underscore attribute {name}")
         obj = self._get_obj()
+        if isinstance(obj,ONDEFileGraphSnapshot):
+            return object.__getattribute__(obj, name) # The file graph snapshot uses items not attributes for the onde graph, so regular old attribute behavior is fine.
+            
         if isinstance(obj,ONDEObject):
             _get_attr = object.__getattribute__(self, "_get_attr")
             return _get_attr(name)
@@ -3017,6 +3143,27 @@ def _traverse_snapshot_fileneeded_objs(class_defs,cur_obj,add_cur_to_needed,need
         pass
     pass
 
+
+def _search_h5_for_onde_datasets(h5_fh,h5_group,dataset_h5_groups,h5_groups_seen):
+    """ dataset_h5_groups is a dictionary by hdf5 path of hdf5 group objects that contain an ONDE:TYPE attribute starting with ONDE_DATASET
+
+
+    h5_groups_seen is a set of hdf5 group paths seen during the traversal
+    """
+
+    if "ONDE:TYPE" in h5_group.attrs and h5_group.attrs["ONDE:TYPE"][0] == "ONDE_DATASET":
+        dataset_h5_groups[h5_group.name] = h5_group
+        pass
+
+    h5_groups_seen.add(h5_group.name)
+
+    for (name,item) in h5_group.items():
+        if isinstance(item,h5py.Group) and item.name not in h5_groups_seen:
+            _search_h5_for_onde_datasets(h5_fh,item,dataset_h5_groups,h5_groups_seen)
+            pass
+        pass
+    pass
+
 class ONDEFile(object):
     """Represents an HDF5 file that may contain ONDE objects. Unlike most other data structures it is not thread safe (only one thread at a time should be manipulating an ONDEFile). However it is safe for multiple threads to simultaneously access and even modify (by the usual ONDEProxy methods) objects from a single file, so long as only a single thread attempts to write any changes to disk."""
     file_object_dict = None # Dictionary by frozen ONDEBase object of ONDEFileObject.
@@ -3026,12 +3173,16 @@ class ONDEFile(object):
     fh = None # h5py file handle.
     graph = None # ONDEFileGraph object (or subclass)
     db_maxidx = None # integer representing the highest index used in the PyONDE_DB hdf5 group
+    version = None
+    filetype = None
     
-    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None):
+    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None,version = None, filetype = None):
         self.class_defs = class_defs
         self.h5path = h5path
         self.mode = mode
         self.fh = fh
+        self.version = version
+        self.filetype = filetype
 
         self.file_object_dict = {}
         self.graph = ONDEFileGraph(class_defs = self.class_defs)
@@ -3039,10 +3190,15 @@ class ONDEFile(object):
         if self.mode not in {"r","r+","w","w-","x","a"}:
             raise ValueError(f"Unknown mode: {self.mode:s}")
         
-        if self.mode == "r+" or self.mode == "a":
+        if self.mode == "r+" or self.mode == "a" or self.mode == "r":
+            
+            if version is not None:
+                raise ValueError("Attempting to set ONDE_VERSION on existing file.")
+            if filetype is not None:
+                raise ValueError("Attempting to set ONDE_FILETYPE on existing file.")
             self.load() # Attempt to read in current contents.
             pass
-
+     
         pass
 
     def __getitem__(self,index):
@@ -3052,18 +3208,73 @@ class ONDEFile(object):
         return self.graph._set_item(index,value)
     
     def load(self):
-        raise NotImplementedError()
+        self.version = self.fh.attrs["ONDE_VERSION"]
+        self.filetype = self.fh.attrs["ONDE_FILETYPE"]
+
+        # check for PyONDE_DB and db_maxidx
+        self.db_maxidx = 0
+        if "PyONDE_DB" in self.fh:
+            db = self.fh["PyONDE_DB"]
+            for db_key in db.keys():
+                if db_key.isdigit():
+                    db_keynum = int(db_key)
+                    if db_keynum > self.db_maxidx:
+                        self.db_maxidx = db_keynum
+                        pass
+                    pass
+                pass
+            pass
+        import pdb
+        pdb.set_trace()
+        # Search through group structure for datasets.
+        dataset_h5_groups = collections.OrderedDict() # dictionary by hdf5 path of hdf5 group objects that contain an ONDE:TYPE attribute starting with ONDE_DATASET
+        h5_groups_seen = set() # set of hdf5 group paths seen during the traversal
+        _search_h5_for_onde_datasets(self.fh,self.fh,dataset_h5_groups,h5_groups_seen)
+
+        fileobjs_by_h5path = {}
+
+        dataset_instances_by_h5path = collections.OrderedDict()
+        for group_path in dataset_h5_groups:
+            dataset_instances_by_h5path[group_path] = ONDEObject.load_from_hdf5(self,fileobjs_by_h5path,self.fh,dataset_h5_groups[group_path])
+            pass
+
+        # replace existing contents of self.group as an atomic transaction
+        with ONDETransaction(self.graph) as tr:
+            for key in list(tr.graph.keys()):
+                del tr.graph[key]
+                pass
+
+            for h5path in dataset_instances_by_h5path:
+
+                instance = dataset_instances_by_h5path[h5path]
+                unique_id = id(instance) # !!!*** need a proper unique ID
+                tr.graph[str(unique_id)] = instance
+                pass
+            pass
+        pass
+    
+                                                            
 
     def flush(self):
         snap = self.graph.latest_snap
 
-        # Ensure ONDE:FILETYPE and ONDE:VERSION are present
-        if "ONDE:VERSION" not in self.fh.attrs:
-            self.fh.attrs["ONDE:VERSION"] = self.class_defs.VERSION
+        # Ensure ONDE_FILETYPE and ONDE_VERSION are present
+        if "ONDE_VERSION" not in self.fh.attrs:
+            if self.version is not None:
+                self.fh.attrs["ONDE_VERSION"] = self.version
+                pass
+            else:
+                self.fh.attrs["ONDE_VERSION"] = self.class_defs.VERSION
+                pass
             pass
 
-        if "ONDE:FILETYPE" not in self.fh.attrs:
-            self.fh.attrs["ONDE:FILETYPE"] = "ONDE_UT"
+        if "ONDE_FILETYPE" not in self.fh.attrs:
+            if self.filetype is not None:
+                self.fh.attrs["ONDE_FILETYPE"] = self.filetype
+                pass
+            else:
+                self.fh.attrs["ONDE_FILETYPE"] = "ONDE_UT"
+                pass
             pass
 
         # Make sure PyONDE_DB HDF5 group exists.
@@ -3169,7 +3380,7 @@ class ONDEFileObject(object):
     """Represents a frozen ONDEBase subclass instance that is represented in an HDF5 file."""
     onde_instance = None # Reference to an ONDEBase subclass instance.
     hdf5_path = None # Path of the given object in the file.
-    #hdf5_attrname = None # If this FileObject is stored as an attribute, then 3this is the attribute name. Unnecessary because attributes will be written as part of their parent object.
+    #hdf5_attrname = None # If this FileObject is stored as an attribute, then this is the attribute name. Unnecessary because attributes will be written as part of their parent object.
     # hdf5_obj = None # Actual h5py object.
 
     def __init__(self, onde_instance = None, hdf5_path = None): #, hdf5_obj = None):
