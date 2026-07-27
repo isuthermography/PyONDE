@@ -966,20 +966,22 @@ class ONDEArray(ONDEBase):
         #    pass
         
         if "value" in kwargs:
-            value = copy.copy(kwargs["value"])
-            if isinstance(value, collections.abc.Sequence):
-                dtype = None
-                if len(value) > 0 and isinstance(value[0],str):
-                    # For collection of strings, use h5py string datatype for numpy
-                    dtype = h5py.string_dtype()
+            if kwargs["value"] is not None:
+                value = copy.copy(kwargs["value"])
+                if isinstance(value, collections.abc.Sequence):
+                    dtype = None
+                    if len(value) > 0 and isinstance(value[0],str):
+                        # For collection of strings, use h5py string datatype for numpy
+                        dtype = h5py.string_dtype()
+                        pass
+                    value = np.array(value,dtype=dtype)
                     pass
-                value = np.array(value,dtype=dtype)
+                elif isinstance(value, np.ndarray):
+                    # value.flags.writeable = False
+                    pass
+                else:
+                    raise ValueError(f"ONDEArray: Cannot understand value type {value.__class__.__name__:s}")
                 pass
-            elif isinstance(value, np.ndarray):
-                # value.flags.writeable = False
-                pass
-            else:
-                raise ValueError(f"ONDEArray: Cannot understand value type {value.__class__.__name__:s}")
             del kwargs["value"]
             pass
         #self.store_as_dataset = store_as_dataset
@@ -1101,12 +1103,17 @@ class ONDEReferenceArray(ONDEBase):
         shape = ()
 
         if "shape" in kwargs:
-            shape = tuple(kwargs["shape"])
+            if kwargs["shape"] is not None:
+                shape = tuple(kwargs["shape"])
+                pass
             del kwargs["shape"]
             pass
         
         if "refs" in kwargs:
-            refs = TwoWayArray(byindex=kwargs["refs"])
+            if kwargs["refs"] is not None:
+                refs = TwoWayArray(byindex=kwargs["refs"])
+                shape = kwargs["refs"].shape
+                pass
             del kwargs["refs"]
             pass
 
@@ -1115,7 +1122,7 @@ class ONDEReferenceArray(ONDEBase):
             pass
         
         #self.store_as_dataset = store_as_dataset
-        self.refs = refs
+        object.__setattr__(self, "refs", refs)
         super().__init__(_orig,**kwargs)
         pass
 
@@ -1163,7 +1170,22 @@ class ONDEReferenceArray(ONDEBase):
         self.refs[index] = ref
         pass
 
+    def __getattribute__(self,name):
+        if name == "refs":# or name == "store_as_dataset":
+            _get_data = object.__getattribute__(self, "_get_data")
+            return _get_data(name)
 
+        return super().__getattribute__(name)
+
+    def __setattr__(self,name,value):
+        if name == "refs": # or name == "store_as_dataset":
+            self._set_data(name,value)
+            pass
+        else:
+            
+            super().__setattr__(name,value)
+            pass
+        pass
     
     def _freeze(self):
         if self._frozen:
@@ -2200,6 +2222,10 @@ class ONDEClassInstanceWrapper(object):
         assert(False)
         pass
 """
+    def __setitem__(self,key,value):
+        self._set_attr_or_item("_set_item",key,value)
+        return
+    
     def __setattr__(self,name,value):
         if name.startswith('_'):
             raise ValueError('Cannot assign attribute with leading underscore')
@@ -2498,7 +2524,7 @@ class ONDEClassDefinitions(object):
     def load_from_csv(cls, filename):
         class_defs = ONDEClassDefinitions()
         
-        with open(filename,mode="r",encoding="utf-8") as csvfh:
+        with open(filename,mode="r",encoding="utf-8-sig") as csvfh:
             reader = csv.reader(csvfh, delimiter=";")
 
             for row in reader:
@@ -2512,12 +2538,12 @@ class ONDEClassDefinitions(object):
                 if classname == "Class":
                     # header csv line
                     continue
-
-                if classname == "" and name == "ONDE:VERSION":
+                
+                if name == "ONDE:VERSION":
                     class_defs.VERSION=size_or_content
                     continue
 
-                if classname == "" and name == "ONDE:FILETYPE":
+                if name == "ONDE:FILETYPE":
                     # ignore filetype definition in .csv
                     continue
                 
