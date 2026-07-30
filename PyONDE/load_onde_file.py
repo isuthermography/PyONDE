@@ -8,7 +8,7 @@ import tempfile
 
 import onde
 
-class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "ONDE_fields", "ONDE_fields.csv")
+class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "build", "ONDE_fields.csv")
 
 output_path = os.path.join(tempfile.gettempdir(), "pyonde_build_onde_file_output.onde")
 

@@ -1311,7 +1311,7 @@ class ONDEReferenceArray(ONDEBase):
         for refarray in nditer:
             ref = refarray[()]
             if ref is not None:
-                refs[nditer.multi_index] = ONDEObject.load_from_hdf5(ONDE_file,fileobjs_by_h5path,h5_fh,h5_fh[ref])
+                refs[nditer.multi_index] = ONDEObject.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,h5_fh[ref])
                 pass
             pass
         instance = cls(None,refs = refs, shape = np_h5ref_array.shape)
@@ -1672,17 +1672,17 @@ class ONDEObject(ONDEBase):
         for (subname,subobj) in h5_group.items():
             if isinstance(subobj,h5py.Dataset):
                 # Check if hdf5 reference
-                ref_type = h5py.check_dtype(ref = subobj.data.dtype)
+                ref_type = h5py.check_dtype(ref = subobj.dtype)
                 if ref_type is not None:
                     # array of references
                     
-                    attr_obj = ONDEReferenceArray.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,subobj.data)
+                    attr_obj = ONDEReferenceArray.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,subobj[...])
                     _ONDE_attrs[subname] = attr_obj
                     _ONDE_dataset_attrs.add(subname)
                     pass
                 else:
                     # Array of values
-                    attr_obj = ONDEArray.new(value = subobj.data)
+                    attr_obj = ONDEArray.new(value = subobj[...])
                     _ONDE_attrs[subname] = attr_obj
                     _ONDE_dataset_attrs.add(subname)
                     pass
