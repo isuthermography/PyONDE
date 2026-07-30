@@ -358,7 +358,7 @@ class TwoWayArray(object):
             oldobj = self._byindex[index]
             if  oldobj is not None:
                 # Remove old back-reference
-                self._byobjid[id(oldobj)] = self._byobjid[id(oldobj)] - frozenset({tuple(obj)})
+                self._byobjid[id(oldobj)] = self._byobjid[id(oldobj)] - frozenset({index})
                 pass
             
             self._byindex[index] = obj
@@ -953,6 +953,9 @@ class ONDEArray(ONDEBase):
     
     def __init__(self, _orig = None, **kwargs):
         #store_as_dataset = False
+        value = None
+        shape = None
+        dtype = None
         
         if _orig is not None:
             value = _orig.value
@@ -964,6 +967,16 @@ class ONDEArray(ONDEBase):
         #    store_as_dataset = bool(kwargs["store_as_dataset"])
         #    del kwargs["store_as_dataset"]
         #    pass
+        if "shape" in kwargs:
+            if kwargs["shape"] is not None:
+                shape = tuple(kwargs["shape"])
+                pass
+            del kwargs["shape"]
+            pass
+        if "dtype" in kwargs:
+            dtype = kwargs["dtype"]
+            del kwargs["dtype"]
+            pass
         
         if "value" in kwargs:
             if kwargs["value"] is not None:
@@ -984,6 +997,10 @@ class ONDEArray(ONDEBase):
                 pass
             del kwargs["value"]
             pass
+        if value is None:
+            value = np.zeros(shape, dtype = dtype)
+            pass
+        
         #self.store_as_dataset = store_as_dataset
         self.value = value
         super().__init__(_orig, **kwargs)
@@ -1220,15 +1237,13 @@ class ONDEReferenceArray(ONDEBase):
         pass
     
     def _list_edges(self):
-        nditer = self.refs.iter() #np.nditer object
-        sz = nditer.itersize()
+        nditer = iter(self.refs) #np.nditer object
+        sz = nditer.itersize
         
         edgelist= []
         for cnt in range(sz):
+            next(nditer)
             edgelist.append(nditer.multi_index)
-            if cnt < sz-1:
-                next(nditer)
-                pass
             pass
         return edgelist
 
@@ -1281,7 +1296,7 @@ class ONDEReferenceArray(ONDEBase):
                 h5_byindex[nditer.multi_index] = onde_file.fh[onde_file.file_object_dict[obj].hdf5_path].ref
                 pass
             pass
-        ds = parent.create_dataset("name",data=h5_byindex)
+        ds = parent.create_dataset(name,data=h5_byindex)
         pass
     
     @classmethod
@@ -1375,7 +1390,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1540,14 +1555,31 @@ class ONDEObject(ONDEBase):
                 if attrname in _ONDE_dataset_attrs:
                     storage_suffix = " (hdf5 dataset storage)"
                     pass
+                attrval=_ONDE_attrs[attrname]
+                if attrval is not None:
+                    new_extra_attrs[attrname]=object.__getattribute__(attrval, "_repr_short")() + storage_suffix
+                    pass
+                else:
+                    new_extra_attrs[attrname]="None" + storage_suffix
+                    pass
                 
-                new_extra_attrs[attrname]=object.__getattribute__(_ONDE_attrs[attrname], "_repr_short")() + storage_suffix
                 pass
             pass
         new_extra_attrs.update(extra_attrs)
         return repr_helper(indentation, myclass,
                            ID=f"{id(self):x}",
                            **new_extra_attrs)
+
+    def _onde_class_name(self):
+        classname = "(None)"
+        if "ONDE:TYPE" in self._ONDE_attrs:
+            if isinstance(self._ONDE_attrs["ONDE:TYPE"],ONDEArray):
+                if len(self._ONDE_attrs["ONDE:TYPE"].value) > 0:
+                    classname = self._ONDE_attrs["ONDE:TYPE"].value[0]
+                    pass
+                pass
+            pass
+        return classname
 
     def _hdf5_write_group(self,onde_file,parent,parent_path,name,onde_fileobj):
         """Write this object to a new hdf5 group
@@ -1556,6 +1588,8 @@ class ONDEObject(ONDEBase):
         for attrname in self._ONDE_attrs:
             value = self._ONDE_attrs[attrname]
             if attrname in self._ONDE_dataset_attrs:
+                if isinstance(value,ONDEObject) or isinstance(value,ONDEValue):
+                    raise ValueError(f"Error writing ONDE object of class {self._onde_class_name()}: Attribute {attrname} is marked for dataset storage, but is an {type(value).__name__} not an ONDEArray or ONDEReferenceArray")
                 value._hdf5_write_dataset(onde_file,gr,gr.name,attrname,None)
                 pass
             else:
@@ -2225,6 +2259,10 @@ class ONDEClassInstanceWrapper(object):
     def __setitem__(self,key,value):
         self._set_attr_or_item("_set_item",key,value)
         return
+
+    def __getitem__(self,key):
+        return self._get_attr_or_item("_get_item",key)
+    
     
     def __setattr__(self,name,value):
         if name.startswith('_'):
@@ -2407,8 +2445,8 @@ class ONDEClassDefinitions(object):
         shorthand_blacklist = set()
         
         def add_field(fieldname,field,extra_keys):
-            full_fields_dict[fieldname]=field.attributes[fieldname]
-            combined_fields_dict[fieldname]=field.attributes[fieldname]
+            full_fields_dict[fieldname]=field
+            combined_fields_dict[fieldname]=field
             for key in extra_keys:
                 if key in shorthand_blacklist:
                     continue
@@ -2457,7 +2495,7 @@ class ONDEClassDefinitions(object):
                     extra_keys.add(fieldname[(fieldname.index(':')+1):])
                     pass
 
-                add_field(fieldname,self.classes[classname],extra_keys)
+                add_field(fieldname,self.classes[classname].attributes[fieldname],extra_keys)
                 pass
 
             # Gather mandatory accessory classes
@@ -2477,7 +2515,7 @@ class ONDEClassDefinitions(object):
             acc_class = self.acc_classes[acc_class_name]
 
             # Gather fields from this accessory class
-            for fieldname in self.classes[classname].attributes:
+            for fieldname in acc_class.attributes:
                 extra_keys=set()
                 if ':' in fieldname:
                     #Shorthand for field name by admitting colon

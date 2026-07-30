@@ -58,7 +58,9 @@ ds.SETUP=of.graph.new_obj("ONDE_SETUP_UT")
 ds.SETUP.GEOMETRIC_SETUP=of.graph.new_obj("ONDE_GEOMETRIC_SETUP")
 ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY = onde.ONDEReferenceArray.new(shape = (1,))
 ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0] = of.graph.new_obj("ONDE_SPATIAL_TRAJECTORY")
-ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0].TRAJECTORY = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),))
+#This next line should work but doesn't ( fails silently)
+#ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0].TRAJECTORY = np.array(((e0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),))
+ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0].TRAJECTORY = onde.ONDEArray.new(value = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT = of.graph.new_obj("ONDE_COMPONENT")
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT.VELOCITIES = onde.ONDEArray.new(value = [np.nan,np.nan])
 ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST = onde.ONDEReferenceArray.new(shape = (1,))
@@ -75,8 +77,10 @@ ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].SHAPE = onde.ONDEArray.new(value = np.ar
 ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].SIZE = onde.ONDEArray.new(value = np.array(((0, (0.5/2)*25.4e-3, 0, 360, 0, 0),)))
 ds.SETUP.ULTRASONIC_SETUP = of.graph.new_obj("ONDE_ULTRASONIC_SETUP")
 ds.SETUP.ULTRASONIC_SETUP.ASCAN_SAMPLE_RATE = 1/dt
-ds.SETUP.ULTRASONIC_SETUP.ASCAN_START = 0.0
-ds.SETUP.ULTRASONIC_SETUP.GAIN = np.array((10**(60/20),))
+ds.SETUP.ULTRASONIC_SETUP.ASCAN_START = onde.ONDEArray.new(value = np.array(0.0))
+#This next line should work but doesn't ( fails silently)
+#ds.SETUP.ULTRASONIC_SETUP.GAIN = np.array((10**(60/20),))
+ds.SETUP.ULTRASONIC_SETUP.GAIN = onde.ONDEArray.new(value = np.array((10**(60/20),)))
 # Not quite clear what other rectification options mean (?)
 ds.SETUP.ULTRASONIC_SETUP.RECTIFICATION = "FULL_WAVE"
 
