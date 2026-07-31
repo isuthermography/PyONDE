@@ -1,7 +1,7 @@
 all: LowLevel_Class_Structure.png
 
 api_regen:
-	sphinx-apidoc -o source/ ../PyONDE
+	sphinx-apidoc -o source/ ../PyONDE "../PyONDE/onde" "../PyONDE/bin"
 
 %.png: %.md
 	plantuml $<
