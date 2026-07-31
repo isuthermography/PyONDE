@@ -68,9 +68,13 @@ onde_basic_fields = {
                 )
             }
 
-def repr_helper(indentation, classname, **attrdict):
+def repr_helper(indentation, classname, _extra_info = None, **attrdict):
     lines = []
-    lines.append(" "*indentation + classname)
+    classline = " "*indentation + classname
+    if _extra_info is not None:
+        classline += " "+_extra_info
+        pass
+    lines.append(classline)
     for attrname in attrdict:
         lines.append(" "*(indentation+2) + f"{attrname:>18s}: {attrdict[attrname]:s}")
         pass
@@ -294,7 +298,7 @@ class TwoWayArray(object):
             pass
         
         if byindex is None:
-            byindex = np.zeros(shape,dtype="O")
+            byindex = np.empty(shape,dtype="O")
             pass
 
         if isinstance(byindex, TwoWayArray):
@@ -481,7 +485,8 @@ class ONDEFileGraph(object):
         pass
     """
 
-    def __getitem__(self, name):
+    
+    def _get_item(self, name):
         latest_snap = object.__getattribute__(self, "latest_snap")
         
         # call ONDEProxy
@@ -493,7 +498,10 @@ class ONDEFileGraph(object):
             return ONDEClassInstanceWrapper.new_from_proxy(obj_proxy)
         return obj_proxy
 
-    def __setitem__(self, name, value):
+    def __getitem__(self, name):
+        return self._get_item(name)
+    
+    def _set_item(self, name, value):
         latest_snap = object.__getattribute__(self, "latest_snap")
 
         snap_proxy = ONDEProxy.new_from_snapshot(self, latest_snap)
@@ -502,24 +510,36 @@ class ONDEFileGraph(object):
 
         pass
 
+    def __setitem__(self, name, value):
+        self._set_item(name,value)
+        pass
+    
     def keys(self):
         latest_snap = object.__getattribute__(self, "latest_snap")
         return latest_snap._list_items()
 
-   
-    def new_obj(self,onde_classname,**kwargs):
+    def __iter__(self):
+        return iter(self.keys())
+
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        extra_info = None
         if self.class_defs is not None:
-            return ONDEClassInstanceWrapper.new_obj(self,onde_classname,**kwargs)
-        return ONDEObject.new(ONDE_TYPE = ONDEArray.new([onde_classname], _frozen = True),**kwargs)
+            extra_info = f"(ONDE v{self.class_defs.version:s} class definitions)"
+            pass
+        return repr_helper(indentation, "ONDEFileGraph", _extra_info = extra_info)+"\n"+self.latest_snap._repr(indentation+2)
+        
+    def __repr__(self):
+        return self._repr(0)
+   
 
     @classmethod
-    def new(cls,class_def_csv_path=None,snapshot=None):
-        defs = None
-        if class_def_csv_path is not None:
-            defs = ONDEClassDefinitions.load_from_csv(class_def_csv_path)
-            pass
+    def new(cls,class_defs=None,snapshot=None):
+        #defs = None
+        #if class_def_csv_path is not None:
+        #    defs = ONDEClassDefinitions.load_from_csv(class_def_csv_path)
+        #    pass
         
-        return cls(class_defs = defs,latest_snap=snapshot)
+        return cls(class_defs = class_defs,latest_snap=snapshot)
         
     pass
 
@@ -1007,7 +1027,7 @@ class ONDEArray(ONDEBase):
         pass
 
     def __getattribute__(self,name):
-        if name == "value":# or name == "store_as_dataset":
+        if name == "value" or name == "shape":# or name == "store_as_dataset":
            
             _get_data = object.__getattribute__(self, "_get_data")
             return _get_data(name)
@@ -1023,15 +1043,22 @@ class ONDEArray(ONDEBase):
             super().__setattr__(name,value)
             pass
         pass
-   
-    def __getitem__(self,index):
-        return self.value[index]
 
-    def __setitem__(self,index,el_value):
+    def _get_item(self,index):
+        return self.value[index]
+    
+    def __getitem__(self,index):
+        return self._get_item(index)
+
+    def _set_item(self,index,el_value):
         if self._frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
 
         self.value[index] = el_value
+        pass
+
+    def __setitem__(self,index,el_value):
+        self._set_item(index,el_value)
         pass
 
     def _get_data(self, name):
@@ -1041,7 +1068,9 @@ class ONDEArray(ONDEBase):
 
         if name == "value": # or name == "store_as_dataset":
             return object.__getattribute__(self, name)
-
+        elif name == "shape":
+             return object.__getattribute__(self, "value").shape
+        
         raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
     
     def _set_data(self, name, value):
@@ -1062,7 +1091,9 @@ class ONDEArray(ONDEBase):
         pass
 
     def _repr_short(self, onde_class=None):
-        return f"ONDEArray(shape={str(object.__getattribute__(self, 'value').shape):s},dtype={str(object.__getattribute__(self, 'value').dtype):s})"
+        if len(self.shape)==1 and self.shape[0]<8:
+            return f"ONDEArray([{str(list(self.value))}])"
+        return f"ONDEArray(shape={str(self.shape):s},dtype={str(self.value.dtype):s})"
     
     def _repr(self, indentation, onde_class=None, extra_attrs={}):
         return repr_helper(indentation, "ONDEArray",
@@ -1224,7 +1255,9 @@ class ONDEReferenceArray(ONDEBase):
         path_entry = path[0]
 
         if isinstance(path_entry, numbers.Integral) or isinstance(path_entry, collections.abc.Sequence):
-            return self.refs[path_entry]._follow_path(ONDEPath(path[1:]))
+            if self.refs[path_entry] is not None:
+                return self.refs[path_entry]._follow_path(ONDEPath(path[1:]))
+            return None
         else:
             raise AttributeError(f"Cannot index {self.__class__.__name__} by {path_entry}")
         
@@ -1243,7 +1276,10 @@ class ONDEReferenceArray(ONDEBase):
         edgelist= []
         for cnt in range(sz):
             next(nditer)
-            edgelist.append(nditer.multi_index)
+
+            if self.refs[nditer.multi_index] is not None:
+                edgelist.append(nditer.multi_index)
+                pass
             pass
         return edgelist
 
@@ -1305,7 +1341,7 @@ class ONDEReferenceArray(ONDEBase):
 
     @classmethod
     def load_from_hdf5(cls,onde_file,fileobjs_by_h5path,h5_fh,np_h5ref_array):
-        refs  = np.zeros(np_h5ref_array.shape,dtype = "O")
+        refs  = np.empty(np_h5ref_array.shape,dtype = "O")
         nditer = np.nditer(np_h5ref_array, flags = ("multi_index","refs_ok"))
 
         for refarray in nditer:
@@ -1604,10 +1640,34 @@ class ONDEObject(ONDEBase):
         """
         parent.attrs[name] = onde_file.fh[onde_file.file_object_dict[self].hdf5_path].ref
         pass
-    
+
+
     @classmethod
-    def new(cls, ONDE_TYPE = None, _ONDE_attrs = None,_ONDE_dataset_attrs = None, **kwargs):
-        """Main constructor to call"""
+    def new(cls, file_or_graph,onde_classname, ONDE_TYPE = None, _ONDE_attrs = None,_ONDE_dataset_attrs = None, **kwargs):
+        """Main constructor to call. If file_or_graph is provided, then the ONDEObject will be created but in fact the returned python object will be instead an ONDEClassInstanceWrapper with the context of that file or graph and the corresponding class definitions."""
+
+        graph = None
+        
+        if isinstance(file_or_graph, ONDEFileGraph):
+            graph = file_or_graph
+            pass
+        elif file_or_graph is not None:
+            graph = file_or_graph.graph
+            pass
+        
+        if onde_classname is not None and ONDE_TYPE is None:
+            class_derivation = [ onde_classname ]
+            if graph is not None and graph.class_defs is not None:
+                class_defs = graph.class_defs
+                if onde_classname in class_defs.classes:
+                    onde_class = class_defs.classes[onde_classname]
+                    class_derivation = onde_class.class_derivation
+                    pass
+                pass
+            
+            ONDE_TYPE = ONDEArray.new(class_derivation, _frozen = True)
+            pass
+        
         constructargs = {}
         if ONDE_TYPE is not None:
             constructargs["ONDE:TYPE"] = ONDE_TYPE
@@ -1624,6 +1684,9 @@ class ONDEObject(ONDEBase):
         #for attrname in kwargs:
         #    setattr(newobj, attrname, kwargs[attrname])
         #    pass
+
+        if file_or_graph is not None:
+            return ONDEClassInstanceWrapper(_graph=graph,_obj=newobj)
         return newobj
 
     @classmethod
@@ -1717,7 +1780,8 @@ class ONDEFileGraphSnapshot(ONDEObject):
     _get_attr=ONDEBase._get_attr
     _has_attr=ONDEBase._has_attr
     _set_attr=ONDEBase._set_attr
-    __getattribute__=ONDEBase.__getattribute__
+    # __getattribute__=ONDEBase.__getattribute__
+    __getattribute__=object.__getattribute__
     __setattr__=ONDEBase.__setattr__
 
     def _get_item(self,index):
@@ -1737,7 +1801,10 @@ class ONDEFileGraphSnapshot(ONDEObject):
 
     def keys(self):
         return self._list_items()
-    
+
+    def __iter__(self):
+        return iter(self.keys())
+
     #@classmethod
     #def new(cls, entry_points = None):
     #    if entry_points is None:
@@ -2381,7 +2448,7 @@ class ONDEClassInstanceWrapper(object):
             raise ValueError("Graph does not have class definitions loaded")
         
         onde_class = graph.class_defs.classes[onde_classname]
-        obj = ONDEObject.new(ONDE_TYPE = ONDEArray.new(onde_class.class_derivation, _frozen = True), **kwargs)
+        obj = ONDEObject.new(None,None,ONDE_TYPE = ONDEArray.new(onde_class.class_derivation, _frozen = True), **kwargs)
         # proxy = ONDEProxy(_path=None)
 
         return cls(_graph=graph,_obj=obj)
@@ -2581,7 +2648,7 @@ class ONDEClassDefinitions(object):
                     continue
                 
                 if name == "ONDE:VERSION":
-                    class_defs.VERSION=size_or_content
+                    class_defs.version=size_or_content
                     continue
 
                 if name == "ONDE:FILETYPE":
@@ -3273,6 +3340,12 @@ class ONDEFile(object):
 
     def __setitem__(self,index,value):
         return self.graph._set_item(index,value)
+
+    def keys(self):
+        return self.graph.keys()
+
+    def __iter__(self):
+        return iter(self.keys())
     
     def load(self):
         self.version = self.fh.attrs["ONDE_VERSION"]
@@ -3331,7 +3404,7 @@ class ONDEFile(object):
                 self.fh.attrs["ONDE_VERSION"] = self.version
                 pass
             else:
-                self.fh.attrs["ONDE_VERSION"] = self.class_defs.VERSION
+                self.fh.attrs["ONDE_VERSION"] = self.class_defs.version
                 pass
             pass
 
@@ -3427,6 +3500,12 @@ class ONDEFile(object):
         self.close()
         return False
 
+    def _repr(self, indentation, onde_class=None, extra_attrs={}):
+        return repr_helper(indentation, "ONDEFile", _extra_info = f"open on \"{self.h5path:s}\"")+"\n"+self.graph._repr(indentation+2)
+        
+    def __repr__(self):
+        return self._repr(0)
+    
     @classmethod
     def new(cls, h5path, mode, class_defs_path=None, extra_class_defs = None, onde_version = None):
         fh = h5py.File(h5path, mode)
