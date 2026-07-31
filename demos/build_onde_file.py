@@ -5,9 +5,9 @@ import tempfile
 from datetime import datetime,timezone
 import numpy as np
 
-import onde
+import PyONDE as onde
 
-class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "build", "ONDE_fields.csv")
+#class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "build", "ONDE_fields.csv")
 
 output_path = os.path.join(tempfile.gettempdir(), "pyonde_build_onde_file_output.onde")
 
@@ -20,7 +20,9 @@ t = t0 + np.arange(nt)*dt
 value = np.cos(t)
 
 of = onde.ONDEDatasetFile.new(output_path, "w",
-                              class_defs_path = class_def_csv_path)
+                              #class_defs_path = class_def_csv_path,
+                              onde_version = "0.9.1pre"
+                              )
 
 ds = of.graph.new_obj("ONDE_DATASET_UT_ASCAN")
 ds.LABEL = "First dataset"

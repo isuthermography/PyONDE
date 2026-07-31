@@ -1,4 +1,4 @@
-import onde
+import PyONDE as onde
 
 import os
 

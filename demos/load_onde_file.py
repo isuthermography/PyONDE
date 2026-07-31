@@ -6,11 +6,12 @@ import os.path
 import sys
 import tempfile
 
-import onde
+import PyONDE as onde
 
-class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "build", "ONDE_fields.csv")
+#class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "build", "ONDE_fields.csv")
 
 output_path = os.path.join(tempfile.gettempdir(), "pyonde_build_onde_file_output.onde")
 
 of = onde.ONDEDatasetFile.new(output_path, "r",
-                              class_defs_path = class_def_csv_path)
+                              #class_defs_path = class_def_csv_path,
+                              onde_version = "0.9.1pre")

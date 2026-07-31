@@ -1,4 +1,4 @@
-import onde
+import PyONDE as onde
 
 
 leaf = onde.ONDEValue.new("leaf value", _frozen = True)

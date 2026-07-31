@@ -2559,8 +2559,11 @@ class ONDEClassDefinitions(object):
 
     
     @classmethod
-    def load_from_csv(cls, filename):
+    def load_from_csv(cls, filename,extra_class_defs = None):
         class_defs = ONDEClassDefinitions()
+
+        if extra_class_defs is not None:
+            raise ValueError("Extra class definitions not yet supported")
         
         with open(filename,mode="r",encoding="utf-8-sig") as csvfh:
             reader = csv.reader(csvfh, delimiter=";")
@@ -3288,8 +3291,8 @@ class ONDEFile(object):
                     pass
                 pass
             pass
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         # Search through group structure for datasets.
         dataset_h5_groups = collections.OrderedDict() # dictionary by hdf5 path of hdf5 group objects that contain an ONDE:TYPE attribute starting with ONDE_DATASET
         h5_groups_seen = set() # set of hdf5 group paths seen during the traversal
@@ -3425,11 +3428,15 @@ class ONDEFile(object):
         return False
 
     @classmethod
-    def new(cls, h5path, mode, class_defs_path=None):
+    def new(cls, h5path, mode, class_defs_path=None, extra_class_defs = None, onde_version = None):
         fh = h5py.File(h5path, mode)
+        
         class_defs = None
+        if class_defs_path is None and onde_version is not None:
+            class_defs_path = os.path.join(os.path.split(sys.modules[cls.__module__].__file__)[0],"onde_versions",f"ONDE_fields_v{onde_version:s}.csv")
+            pass
         if class_defs_path is not None:
-            class_defs = ONDEClassDefinitions.load_from_csv(class_defs_path)
+            class_defs = ONDEClassDefinitions.load_from_csv(class_defs_path,extra_class_defs = extra_class_defs)
             pass
         
         return cls(class_defs = class_defs, h5path = h5path, mode = mode, fh = fh)

@@ -1,0 +1,20 @@
+[project]
+name = 'PyONDE'
+dynamic = ['version','authors','description','urls']
+requires-python = ">= 3.8"
+readme = "README.md"
+classifiers = [
+	    "Development Status :: 3 - Alpha",
+	    "License :: OSI Approved :: Apache License"
+	    ]
+
+#[project.scripts]
+#example_script = "PyONDE.bin.example_script:main"
+
+[build-system]
+requires = ["setuptools>=64","numpy","h5py","setuptools_scm[toml]>=5"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+# Note: With recent setuptools we can use "version_file" instead of "write_to"
+write_to = "PyONDE/_version.py"

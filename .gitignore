@@ -2,4 +2,6 @@
 *.bak
 __pycache__
 build/
-LowLevel_Class_Structure.png
+doc/LowLevel_Class_Structure.png
+PyONDE/_version.py
+*.egg-info*
