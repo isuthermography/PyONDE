@@ -3,6 +3,7 @@ ONDE_UT;ONDE:FILETYPE;For detailed information, see https://github.com/COFREND/O
 ONDE_UT;ONDE:VERSION;;M;A;H5T_STRING;1;"0.9.1";;;
 ONDE_DATASET;ONDE:TYPE;;M;A;H5T_STRING;1;["ONDE_DATASET"];;;
 ONDE_DATASET;ONDE:LABEL;A name for this dataset;O;A;H5T_STRING;1;;;;
+ONDE_DATASET;ONDE:UUID;The UUID field is a mandatory universally unique identifier. These are stored as strings, limited to no more than 63 printable ASCII characters. UUIDs should be compatible with DICOM for interoperabiltity. See [Creating a Privately Defined Unique Identifier](https://dicom.nema.org/medical/dicom/current/output/chtml/part05/chapter_B.html) and [UUID Derived UID](https://dicom.nema.org/medical/dicom/current/output/chtml/part05/sect_B.2.html). The recommended process is to create a 128 bit UUID for each dataset by hashing information including equipment model and serial number and time, and if possible end user information as well. This UUID should be printed as a decimal number, with leading zeros eliminated, and given a prefix of "2.25.". ;M;A;H5T_STRING;1;;;;
 ONDE_DATASET;ONDE_DATASET:SETUP;;M;A;H5T_STD_REF_OBJ<ONDE_SETUP>;1;;;;
 ONDE_DATASET;ONDE_DATASET:OPERATOR;;O;A;H5T_STRING;1;;;;
 ONDE_DATASET;ONDE_DATASET:DATE_AND_TIME;;O;A;H5T_STRING;1;;;;

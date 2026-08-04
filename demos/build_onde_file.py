@@ -3,13 +3,15 @@ import os.path
 import sys
 import tempfile
 from datetime import datetime,timezone
+import uuid
 import numpy as np
 
 from PyONDE import (ONDEDatasetFile,
                     ONDEObject,
                     ONDEArray,
                     ONDEReferenceArray,
-                    ONDEValue)
+                    ONDEValue,
+                    generate_onde_uuid)
 
 #class_def_csv_path =  os.path.join("..", "..", "ONDE-format", "build", "ONDE_fields.csv")
 
@@ -21,7 +23,7 @@ t0 = 10e-6
 
 t = t0 + np.arange(nt)*dt
 
-value = np.cos(t)
+value = np.cos(2*np.pi*800e3*t)
 
 of = ONDEDatasetFile.new(output_path, "w",
                          #class_defs_path = class_def_csv_path,
@@ -29,10 +31,12 @@ of = ONDEDatasetFile.new(output_path, "w",
                          )
 
 ds = ONDEObject.new(of,"ONDE_DATASET_UT_ASCAN")
+ds["ONDE:TYPE"]
 # Use these extra two lines to test out modifying the dataset once finalized by being added into the graph
 #of.graph["ds"] = ds
 #ds = of.graph["ds"]
 ds.LABEL = "First dataset"
+ds.UUID = generate_onde_uuid("ISUCNDE",str(uuid.getnode()),datetime.now(),"")
 ds.AMPLITUDE_DIMENSION = ONDEObject.new(of,"ONDE_DIMENSION")
 ds.AMPLITUDE_DIMENSION.COORDINATE = "Voltage"
 ds.AMPLITUDE_DIMENSION.OFFSET = 0.0
@@ -93,7 +97,7 @@ ds.SETUP.ULTRASONIC_SETUP.GAIN = ONDEArray.new(value = np.array((10**(60/20),)))
 # Not quite clear what other rectification options mean (?)
 ds.SETUP.ULTRASONIC_SETUP.RECTIFICATION = "FULL_WAVE"
 
-# Indexing of the graph should really be by UUID
-of.graph["ds"] = ds
+# Indexing of the graph is by UUID
+of.graph.add(ds)
 of.flush()
 # of.close()

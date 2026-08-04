@@ -488,7 +488,12 @@ class ONDEFileGraph(object):
     
     def _get_item(self, name):
         latest_snap = object.__getattribute__(self, "latest_snap")
-        
+        # Since The entry points are an ONDEFileGraphSnapshot, which does special flexible indexing with shorthands, we do the actual lookup to get the real index.
+
+        obj = latest_snap._get_item(name)
+        obj_keys= [ key for key in latest_snap.keys() if latest_snap._get_item(key) is obj ]
+        assert (len(obj_keys)==1)
+        name=obj_keys[0]
         # call ONDEProxy
         
         snap_proxy = ONDEProxy.new_from_snapshot(self, latest_snap)
@@ -501,18 +506,27 @@ class ONDEFileGraph(object):
     def __getitem__(self, name):
         return self._get_item(name)
     
-    def _set_item(self, name, value):
+    #def _set_item(self, name, value):
+    #    latest_snap = object.__getattribute__(self, "latest_snap")
+    #
+    #    snap_proxy = ONDEProxy.new_from_snapshot(self, latest_snap)
+    #
+    #    snap_proxy._set_item(name,value)
+    #
+    #    pass
+
+    def add(self,dataset):
         latest_snap = object.__getattribute__(self, "latest_snap")
-
+    
         snap_proxy = ONDEProxy.new_from_snapshot(self, latest_snap)
-
-        snap_proxy._set_item(name,value)
-
+    
+        snap_proxy.add(dataset)
+    
         pass
 
-    def __setitem__(self, name, value):
-        self._set_item(name,value)
-        pass
+    #def __setitem__(self, name, value):
+    #    self._set_item(name,value)
+    #    pass
     
     def keys(self):
         latest_snap = object.__getattribute__(self, "latest_snap")
@@ -1426,7 +1440,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1444,11 +1458,25 @@ class ONDEObject(ONDEBase):
 
         pass
 
+    def _get_item(self,name):
+        return self._get_attr(name)
+
+    def _set_item(self,name,value):
+        return self._set_attr(name,value)
+    
+    def __getitem__(self,name):
+        return self._get_attr(name)
+
+    def __setitem__(self,name,value):
+        self._set_attr(name,value)
+        pass
+    
     def _get_attr(self, name):
         """
         Return the named conceptual attribute of an ONDE object.
         """
-        
+        if not isinstance(name,str):
+            raise IndexError(f"Indexes must be strings")
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
 
@@ -1476,11 +1504,20 @@ class ONDEObject(ONDEBase):
         if name in _ONDE_attrs:
             return True
         return False
+    def _has_item(self,name):
+        return self._has_attr(name)
+    
+    def __contains__(self,name):
+        return self._has_attr(name)
     
     def _set_attr(self, name, value):
         """
         Set the named conceptual attribute of an ONDE object. Use _set_dataset_attr() instead if the attribute should have hdf5 dataset storage.
         """
+        _frozen = object.__getattribute__(self, "_frozen")
+        if _frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+        
 
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
@@ -1499,6 +1536,10 @@ class ONDEObject(ONDEBase):
         """
         Set the named conceptual attribute of an ONDE object with dataset storage. Use _set_attr() instead if the attribute should have hdf5 attribute storage.
         """
+        _frozen = object.__getattribute__(self, "_frozen")
+        if _frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+        
 
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
@@ -1586,17 +1627,28 @@ class ONDEObject(ONDEBase):
         if onde_class is None:
             _ONDE_attrs=object.__getattribute__(self, '_ONDE_attrs')
             _ONDE_dataset_attrs = object.__getattribute__(self, "_ONDE_dataset_attrs")
-            for attrname in _ONDE_attrs._keys():
+
+            keys=list(_ONDE_attrs._keys())
+            shortkeys=keys
+
+            if isinstance(self,ONDEFileGraphSnapshot):
+                shortkeys=self.shortkeys()
+
+                pass
+            
+            for keyidx in range(len(keys)):
+                attrname=keys[keyidx]
+                attrnameshort=shortkeys[keyidx]
                 storage_suffix = ""
                 if attrname in _ONDE_dataset_attrs:
                     storage_suffix = " (hdf5 dataset storage)"
                     pass
                 attrval=_ONDE_attrs[attrname]
                 if attrval is not None:
-                    new_extra_attrs[attrname]=object.__getattribute__(attrval, "_repr_short")() + storage_suffix
+                    new_extra_attrs[attrnameshort]=object.__getattribute__(attrval, "_repr_short")() + storage_suffix
                     pass
                 else:
-                    new_extra_attrs[attrname]="None" + storage_suffix
+                    new_extra_attrs[attrnameshort]="None" + storage_suffix
                     pass
                 
                 pass
@@ -1784,23 +1836,70 @@ class ONDEFileGraphSnapshot(ONDEObject):
     __getattribute__=object.__getattribute__
     __setattr__=ONDEBase.__setattr__
 
+    
+
+    #def _set_item(self,index,value):
+    #    return ONDEObject._set_attr(self,index,value)
+
     def _get_item(self,index):
-        return ONDEObject._get_attr(self,index)
+        # Allow shorthand keys
+        keys = self._list_items()
+        if index in keys:
+            return ONDEObject._get_attr(self,index)
 
-    def _set_item(self,index,value):
-        return ONDEObject._set_attr(self,index,value)
+        prefixed = "2.25." + index
+        matching = [ key for key in keys if key.startswith(prefixed) ]
+        if len(matching) == 1:
+            return ONDEObject._get_attr(self,matching[0])
 
+        raise KeyError(f"No Dataset with UUID matching given key \"{index:s}\"")
     def __getitem__(self,index):
         return self._get_item(index)
+    #def __setitem__(self,index,value):
+    #    return self._set_item(index,value)
 
-    def __setitem__(self,index,value):
-        return self._set_item(index,value)
+    def add(self,dataset):
+        # Must maintain parallel logic in ONDEProxy._add()
+        if "ONDE:TYPE" not in dataset or dataset["ONDE:TYPE"].value[0] != "ONDE_DATASET":
+            raise ValueError(f"Attempting to add something other than a dataset to an ONDEFileGraphSnapshot")
+        
+        if "ONDE:UUID" not in dataset:
+            raise ValueError(f"Attempting to add a dataset without a UUID to an ONDEFileGraphSnapshot")
+        ONDEObject._set_attr(self,dataset["ONDE:UUID"].value,dataset)
+        pass
     
     def _list_items(self):
         return ONDEObject._list_attrs(self)
 
     def keys(self):
         return self._list_items()
+
+    def shortkeys(self):
+        full_keys = self._list_items()
+        # shortable_keys is a dictionary listing all of the keys that we can use a shorthand for (i.e. those starting with 2.25.). Values are intialized to none but will be populated with the shorthand eventually
+        shortable_keys = { key: None for key in full_keys if key.startswith("2.25.") }
+        shortable_key_set = frozenset(shortable_keys.keys())
+        #import pdb
+        #pdb.set_trace()
+        for shortable_key in shortable_key_set:
+            for num_chars_for_unique in range(4,len(shortable_key)+1):
+                prefix = shortable_key[:(5 + num_chars_for_unique)]
+                num_keys_matching_prefix = len([ key for key in shortable_key_set if key[:(5 + num_chars_for_unique)] == prefix ])
+                if prefix in full_keys:
+                    num_keys_matching_prefix += 1
+                    pass
+                if num_keys_matching_prefix == 1:
+                    shortable_keys[shortable_key] = prefix[5:]
+                    break
+                if num_chars_for_unique == len(shortable_key):
+                    #Didn't find any prefix
+                    shortable_keys[shortable_key] = shortable_key
+                    pass
+                pass
+            pass
+        reduced_keys = [ shortable_keys[key] if key in shortable_keys else key for key in full_keys ]
+        return reduced_keys
+            
 
     def __iter__(self):
         return iter(self.keys())
@@ -1865,7 +1964,7 @@ class ONDEField(object):
         if len(name_split) != 2:
             raise ValueError(f"Field name {name:s} should have one colon")
 
-        if class_prefix not in class_derivation and not (class_prefix == "ONDE" and name in ["ONDE:LABEL", "ONDE:TYPE_TAGS"]):
+        if class_prefix not in class_derivation and not (class_prefix == "ONDE" and name in ["ONDE:LABEL", "ONDE:TYPE_TAGS","ONDE:UUID"]):
             raise ValueError(f"Mismatch between class name or super classes and prefix defining {name:s}")
         
         if mandatory_optional not in ["M", "O"]:
@@ -1968,7 +2067,7 @@ class ONDEClassInstanceWrapper(object):
                 return (None, None)
             pass
         return (attrname, None)
-            
+    
     def _get_attr_or_item(self,get_method_name,key):
 
         _proxy = object.__getattribute__(self,"_proxy")
@@ -2016,9 +2115,38 @@ class ONDEClassInstanceWrapper(object):
             pass
         pass
 
+
+
+    def _has_attr_or_item(self,has_method_name,key):
+
+        _proxy = object.__getattribute__(self,"_proxy")
+        _obj = object.__getattribute__(self,"_obj")
+        _graph = object.__getattribute__(self,"_graph")
+
+        if _proxy is not None:
+            _obj = _proxy._get_obj()
+            _graph = _proxy._graph
+            pass
+        
+        full_name = key
+        
+        (full_name, field) = self._full_fieldname_from_attrname(_graph, _obj, key)
+        if full_name is None:
+            full_name = key
+            pass
+            
+        if has_method_name == "_has_attr":
+            return _obj._has_attr(full_name)
+
+        if has_method_name == "_has_item":
+            return _obj._has_item(full_name)
+        return False
+    
     def _get_attr(self,name):
         return self._get_attr_or_item("_get_attr",name)
 
+    def __contains__(self,name):
+        return self._has_item(name)
 
     def _get_attr_dataset_storage(self,name):
         obj = self._get_obj()
@@ -2129,6 +2257,9 @@ class ONDEClassInstanceWrapper(object):
 
     def _get_item(self,index):
         return self._get_attr_or_item("_get_item",index)
+
+    def _has_item(self,index):
+        return self._has_attr_or_item("_has_item",index)
 
     def _set_item(self,index,value):
         self._set_attr_or_item("_set_item",index,value)
@@ -3072,7 +3203,12 @@ class ONDEProxy(object):
         if isinstance(obj,ONDEFileGraphSnapshot):
             return object.__getattribute__(obj, name) # The file graph snapshot uses items not attributes for the onde graph, so regular old attribute behavior is fine.
             
+        
         if isinstance(obj,ONDEObject):
+            if isinstance(obj,ONDEFileGraphSnapshot) and name == "add":
+                name = "_add"
+                pass
+            
             _get_attr = object.__getattribute__(self, "_get_attr")
             return _get_attr(name)
 
@@ -3122,6 +3258,18 @@ class ONDEProxy(object):
     
     def _set_attr(self, name, value):
         self._set_attr_or_item_or_data('_set_attr', name, value)
+        pass
+
+    def _add(self,dataset):
+        """add() method for proxying ONDEFileGraphSnapshot"""
+        # Must maintain parallel logic in ONDEFileGraphSnapshot.add()
+        obj = self._get_obj
+        if "ONDE:TYPE" not in obj or obj["ONDE:TYPE"].value[0] != "ONDE_DATASET":
+            raise ValueError(f"Attempting to add something other than a dataset to an ONDEFileGraphSnapshot")
+        
+        if "ONDE:UUID" not in dataset:
+            raise ValueError(f"Attempting to add a dataset without a UUID to an ONDEFileGraphSnapshot")
+        self._set_attr(self,dataset["ONDE:UUID"].value,dataset)
         pass
 
     def _set_dataset_attr(self, name, value):
