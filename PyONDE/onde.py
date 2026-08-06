@@ -1517,7 +1517,9 @@ class ONDEObject(ONDEBase):
         _frozen = object.__getattribute__(self, "_frozen")
         if _frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
-        
+
+        if not isinstance(self, ONDEFileGraphSnapshot) and not ":" in name:
+            raise ValueError(f"ONDEObject: Attempting to set field \"{name:s}\" with no colon-delimited defining class. Usually this means there is a typo in the field name, or that the field is not defined in your class definitions for some reason. If you are trying to add a custom field, be sure to use a custom namespace and accessory class or derived class. You can use bracket notation (e.g. object[\"CLASSNAME:FIELD\"]=...) to assign a field name that contains a colon manually if you do not have a formal class definition loaded")
 
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
@@ -1539,7 +1541,9 @@ class ONDEObject(ONDEBase):
         _frozen = object.__getattribute__(self, "_frozen")
         if _frozen:
             raise RuntimeError("Attempting to modify an object that is already frozen")
-        
+
+        if not isinstance(self, ONDEFileGraphSnapshot) and not ":" in name:
+            raise ValueError(f"ONDEObject: Attempting to set field \"{name:s}\" with no colon-delimited defining class. Usually this means there is a typo in the field name, or that the field is not defined in your class definitions for some reason. If you are trying to add a custom field, be sure to use a custom namespace and accessory class or derived class. You can use bracket notation (e.g. object[\"CLASSNAME:FIELD\"]=...) to assign a field name that contains a colon manually if you do not have a formal class definition loaded")
 
         if name.startswith("_"):
             raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
@@ -1832,6 +1836,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
     _get_attr=ONDEBase._get_attr
     _has_attr=ONDEBase._has_attr
     _set_attr=ONDEBase._set_attr
+    
     # __getattribute__=ONDEBase.__getattribute__
     __getattribute__=object.__getattribute__
     __setattr__=ONDEBase.__setattr__
@@ -1839,7 +1844,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
     
 
     #def _set_item(self,index,value):
-    #    return ONDEObject._set_attr(self,index,value)
+       # return ONDEObject._set_attr(self,index,value)
 
     def _get_item(self,index):
         # Allow shorthand keys
@@ -3282,6 +3287,14 @@ class ONDEProxy(object):
         item_obj = obj._get_item(key)
 
         if isinstance(item_obj, ONDEBase):
+            
+            # if obj is an ONDEFileGraphSnapshot, then we have flexible indexing with shorthands but for the proxy we need the real key
+            if isinstance(obj, ONDEFileGraphSnapshot):
+                item_obj_keys = [ k for k in obj.keys() if obj._get_item(key) is item_obj ]
+                assert (len(item_obj_keys)==1)
+                key = item_obj_keys[0]
+                pass
+
             return self.__class__.new_from_proxy(self, key)
 
         return item_obj
@@ -3535,8 +3548,12 @@ class ONDEFile(object):
             for h5path in dataset_instances_by_h5path:
 
                 instance = dataset_instances_by_h5path[h5path]
-                unique_id = id(instance) # !!!*** need a proper unique ID
-                tr.graph[str(unique_id)] = instance
+                if not "ONDE:UUID" in instance:
+                    raise ValueError(f"Error loading dataset from file {self.h5path:s} at hdf5 path {h5path:s}: No ONDE:UUID field specified")
+                
+                # unique_id = instance["ONDE:UUID"].value
+                # tr.graph[str(unique_id)] = instance
+                tr.graph.add(instance)
                 pass
             pass
         pass

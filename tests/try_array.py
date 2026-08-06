@@ -1,4 +1,4 @@
-import onde
+from PyONDE import onde
 
 
 twa = onde.TwoWayArray(shape=(2,))

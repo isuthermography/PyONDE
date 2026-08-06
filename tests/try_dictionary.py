@@ -1,4 +1,4 @@
-import onde
+from PyONDE import onde
 
 
 twd = onde.TwoWayDictionary()
