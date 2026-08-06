@@ -3510,7 +3510,7 @@ class ONDEFile(object):
     
     def load(self):
         self.version = self.fh.attrs["ONDE_VERSION"]
-        self.filetype = self.fh.attrs["ONDE_FILETYPE"]
+        self.filetype = set(self.fh.attrs["ONDE_FILETYPE"])
 
         # check for PyONDE_DB and db_maxidx
         self.db_maxidx = 0
@@ -3575,10 +3575,10 @@ class ONDEFile(object):
 
         if "ONDE_FILETYPE" not in self.fh.attrs:
             if self.filetype is not None:
-                self.fh.attrs["ONDE_FILETYPE"] = self.filetype
+                self.fh.attrs["ONDE_FILETYPE"] = list(self.filetype)
                 pass
             else:
-                self.fh.attrs["ONDE_FILETYPE"] = "ONDE_UT"
+                self.fh.attrs["ONDE_FILETYPE"] = ["ONDE_DATASET"]
                 pass
             pass
 
