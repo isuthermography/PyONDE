@@ -44,7 +44,7 @@ ds.AMPLITUDE_DIMENSION.SCALE = 1.0
 ds.AMPLITUDE_DIMENSION.UNITS = "Volts"
 ds.DATA = ONDEArray.new(value = value)
 ds.DATE_AND_TIME = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
-ds.INDEX_DIMENSIONS = ONDEReferenceArray.new(refs = np.empty(4,dtype = "O"))
+ds.INDEX_DIMENSIONS = ONDEReferenceArray.new(of,refs = np.empty(4,dtype = "O"))
 ds.INDEX_DIMENSIONS[0] = ONDEObject.new(of,"ONDE_DIMENSION")
 ds.INDEX_DIMENSIONS[0].COORDINATE = "U Position"
 ds.INDEX_DIMENSIONS[0].OFFSET = 0.0
@@ -69,14 +69,14 @@ ds.OPERATOR = "Nemo"
 
 ds.SETUP=ONDEObject.new(of,"ONDE_SETUP_UT")
 ds.SETUP.GEOMETRIC_SETUP=ONDEObject.new(of,"ONDE_GEOMETRIC_SETUP")
-ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY = ONDEReferenceArray.new(shape = (1,))
+ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY = ONDEReferenceArray.new(of, shape = (1,))
 ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0] = ONDEObject.new(of,"ONDE_SPATIAL_TRAJECTORY")
 #This next line should work but doesn't ( fails silently)
 #ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0].TRAJECTORY = np.array(((e0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),))
 ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0].TRAJECTORY = ONDEArray.new(value = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT = ONDEObject.new(of,"ONDE_COMPONENT")
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT.VELOCITIES = ONDEArray.new(value = [np.nan,np.nan])
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST = ONDEReferenceArray.new(shape = (1,))
+ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST = ONDEReferenceArray.new(of,shape = (1,))
 ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0] = ONDEObject.new(of,"ONDE_UT_PROBE")
 ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING = ONDEObject.new(of,"ONDE_UT_COUPLING")
 ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING.INCIDENCE_ANGLE = 0.0
