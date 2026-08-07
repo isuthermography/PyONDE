@@ -13,27 +13,23 @@ class ONDEValue {
 
 class ONDEArray {
   value: numpy array
-  store_as_dataset: True or False
 }
 
 class ONDEReferenceArray {
   refs: array of references
-  store_as_dataset: True or False
 }
 
 class ONDEObject {
-  _ONDE_type: list of classes
-  _ONDE_type_tags: list of accessory classes
   _ONDE_attrs: dictionary of contained ONDEBase
+  _ONDE_dataset_attrs: set of field names for fields which should be stored as HDF5 datasets, not HDF5 attributes
 }
 
-class ONDEGraphSnapshot {
-  _ONDE_type: empty list
+class ONDEFileGraphSnapshot {
   _ONDE_attrs: dictionary of graph entry points
 }
 
-class ONDEGraph {
-  latest_snap: ONDESnapshot
+class ONDEFileGraph {
+  latest_snap: ONDEFileGraphSnapshot
 }
 
 
@@ -42,8 +38,8 @@ ONDEBase <|-- ONDEValue : extends
 ONDEBase <|-- ONDEArray : extends
 ONDEBase <|-- ONDEReferenceArray : extends
 ONDEBase <|-- ONDEObject : extends
-ONDEObject <|-- ONDEGraphSnapshot : extends
-ONDEGraphSnapshot <-- ONDEGraph::latest_snap : references
-ONDEObject <-- ONDEGraphSnapshot::_ONDE_attrs : references
+ONDEObject <|-- ONDEFileGraphSnapshot : extends
+ONDEFileGraphSnapshot <-- ONDEFileGraph::latest_snap : references
+ONDEObject <-- ONDEFileGraphSnapshot::_ONDE_attrs : references
 ONDEObject <-- ONDEReferenceArray::refs : references
 @enduml
