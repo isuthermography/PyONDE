@@ -1,4 +1,11 @@
-all: LowLevel_Class_Structure.png
+help:
+	@echo "make figs: Rebuild figures"
+	@echo "make sphinxhelp: Get help on sphinx build"
+	@echo "make html: Generate html documentation"
+	@echo "make latexpdf: Generate pdf documentation"
+
+figs: LowLevel_Class_Structure.png
+
 
 api_regen:
 	sphinx-apidoc -o source/ ../PyONDE "../PyONDE/onde" "../PyONDE/bin"
@@ -18,7 +25,7 @@ SOURCEDIR     = source
 BUILDDIR      = build
 
 # Put it first so that "make" without argument is like "make help".
-help:
+sphinxhelp:
 	@$(SPHINXBUILD) -M help "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
 
 .PHONY: help Makefile all api_regen

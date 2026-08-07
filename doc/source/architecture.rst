@@ -1,12 +1,12 @@
 Architecture
-------------
+============
 
-PyONDE implements three different abstraction layers through which you can access OMDE data structures. The lowest level, the concrete objects layer, provides classes for representing ONDE information that could be stored in a file. Concrete objects can be changed only while they're being initialized. Then they become "frozen", at which point they are immutable and can no longer be changed.  The middle abstraction level, the writeable proxy layer, wraps the concrete objects so that they appear to be modifiable, but modifications instead result in replacement of an object by a modified copy. The highest abstraction layer, the class instance wrapper, wraps concrete objects or writeable proxies with a layer that is aware of the various classes of ONDE objects defined in the ONDE specification. 
+PyONDE implements three different abstraction layers through which you can access ONDE data structures. The lowest level, the concrete objects layer, provides classes for representing ONDE information that could be stored in a file. Concrete objects can be changed only while they're being initialized. Then they become "frozen", at which point they are immutable and can no longer be changed.  The middle abstraction level, the writeable proxy layer, wraps the concrete objects so that they appear to be modifiable, but modifications instead result in replacement of an object by a modified copy. The highest abstraction layer, the class instance wrapper, wraps concrete objects or writeable proxies with a layer that is aware of the various classes of ONDE objects defined in the ONDE specification. 
 
 The concrete objects layer is implemented by a hierarchy of classes that all derive from class ONDEBase. These classes represent the various forms of data that can be stored in an ONDE file. They are assembled in the form of a directed acyclic graph, just like the ONDE objects they represent, however, there are many cases where a single ONDE object might be represented using several linked concrete ONDEBase objects. For example, an ONDE field with an integer value conceptually is a single object. However, the integer object is represented in PyONDE as a separate ONDEValue object that is referenced by the parent ONDEObject that contains it. So the PyONDE graph structure may contain more elements than what would be obvious from the ONDE specification.
 
 Concrete classes 
---
+-----------------
 
 All concrete classes derive from ONDEBase And are immutable, and therefore thread safe, once frozen:
   * ONDEValue represents simple values such as integers, floating point numbers, and strings. These are represented in the hdf5 file as hdf5 attributes. 
@@ -36,17 +36,20 @@ Accessing entry points from the ONDEFile or ONDEFileGraph gives ONDEClassInstanc
 Transactions and scopes 
 --
 
-When ONDEProxy replaces an object with a modified copy, objects have to be replaced up the access chain because repointing a reference is itself a modification. With multiple changes that need to happen in a multi-threaded environment, simultaneity is important and therefore changes are grouped into transactions. For simple one line notifications the transaction is created automatically and implicitly, then ended when the change is complete. You can also create a transaction explicitly for use in a python context manager ("with" clause) :
-with ONDETransaction(graph,include_paths=[...]) as tr:
-    tr.graph[...].LABEL="New dataset"
-    # More grouped changes here
-    pass
+When ONDEProxy replaces an object with a modified copy, objects have to be replaced up the access chain because repointing a reference is itself a modification. With multiple changes that need to happen in a multi-threaded environment, simultaneity is important and therefore changes are grouped into transactions. For simple one line notifications the transaction is created automatically and implicitly, then ended when the change is complete. You can also create a transaction explicitly for use in a python context manager ("with" clause) ::
+  
+  with ONDETransaction(graph,include_paths=[...]) as tr:
+      tr.graph[...].LABEL="New dataset"
+      # More grouped changes here
+      pass
+    
 (Note that the tr object here is not actually the transaction object created but the scope object resulting from the transaction)
  
-In addition, there is a question as to what objects that point to the original get repointed to the copy. The default behavior is to assume the narrowest possible scope: that only access via the path you specified from the graph entry point will give the new value. However, sometimes a wider scope will be desirable.  For example, if modifying a ONDE_UT_PROBE, you want all of the laws that reference the probe as well as the geometric probe definition to change together. This is done by defining a broader scope. Scopes can be specified when creating a transaction, or within an existing transaction using class ONDEOpScope as a Python context manager ("with" clause) :
-with ONDEOpScope(tr,include_paths=[...]) as sc:
-    sc.graph[...].SETUP.GEOMETRIC_SETUP.SENSOR_LIST.FREQUENCY=2e6
-    pass
+In addition, there is a question as to what objects that point to the original get repointed to the copy. The default behavior is to assume the narrowest possible scope: that only access via the path you specified from the graph entry point will give the new value. However, sometimes a wider scope will be desirable.  For example, if modifying a ONDE_UT_PROBE, you want all of the laws that reference the probe as well as the geometric probe definition to change together. This is done by defining a broader scope. Scopes can be specified when creating a transaction, or within an existing transaction using class ONDEOpScope as a Python context manager ("with" clause) ::
+  
+  with ONDEOpScope(tr,include_paths=[...]) as sc:
+      sc.graph[...].SETUP.GEOMETRIC_SETUP.SENSOR_LIST.FREQUENCY=2e6
+      pass
 
 The net result is fine grained control over the scope of changes. In general, you always want to select the narrowest sufficient scope. Be wary, for example, if datasets can reference other datasets from which they originated, of possibly changing those other datasets as well. For this reason, when creating a transaction or a scope, you can specify explicit exclusion paths to prevent modification of certain subgraphs.
 
