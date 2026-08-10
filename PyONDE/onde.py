@@ -735,7 +735,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -2223,7 +2223,7 @@ class ONDEClassInstanceWrapper(object):
             pass
         
         full_name = key
-        if get_method_name == "_get_attr":
+        if get_method_name == "_get_attr" and isinstance(_obj,ONDEObject):
             (full_name, field) = self._full_fieldname_from_attrname(_graph, _obj, key)
             if full_name is None:
                 full_name = key
@@ -2580,8 +2580,14 @@ class ONDEClassInstanceWrapper(object):
     def __getattribute__(self,name):
         if name.startswith('_'):
             return object.__getattribute__(self,name)
+
+        get_method_name = "_get_attr"
         
-        return self._get_attr_or_item("_get_attr",name)
+        obj = self._get_obj()
+        if isinstance(obj,ONDEReferenceArray) or isinstance(obj,ONDEArray) or isinstance(obj,ONDEValue):
+            get_method_name = "_get_data"
+            pass
+        return self._get_attr_or_item(get_method_name,name)
     obsolete = r"""
         if self._proxy is not None:
             obj = self._proxy._get_obj()
