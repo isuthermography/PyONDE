@@ -1355,6 +1355,38 @@ class ONDEReferenceArray(ONDEBase):
         
         parent.attrs[name] = h5_byindex
         pass
+
+    def _hdf5_write_group(self,onde_file,parent,parent_path,name, hierarchical_write):
+        """Write this object to a new hdf5 group. This group contains a "shape" attribute and a bunch of subgroups or alternatively attributes with hdf5 references named according to the element indices: (00001,00005) etc. the numbers are integers with a minimum of 5 digits, separated by commas and surrounded by parentheses with no spaces.
+        """
+
+        gr = parent.create_group(name)
+
+        byindex = self.refs.byindex
+        gr.attrs["shape"] = str(byindex.shape)
+        assert(hierarchical_write)
+        nditer = np.nditer(byindex, flags = ("multi_index","refs_ok"))
+
+        for objarray in nditer:
+            obj = objarray[()]
+            if obj is not None:
+                
+                index_tuple = nditer.multi_index
+                subgroup_name = "(" + ",".join([f"{idx:05d}" for idx in index_tuple]) + ")"
+                
+                if obj not in onde_file.file_object_dict:
+                    # This object has not been inserted yet, we insert it here.
+
+                    
+                    obj._hdf5_write_group(onde_file,gr,gr.name,subgroup_name,hierarchical_write)
+                    pass
+                else:
+                    gr.attrs[subgroup_name] = onde_file.fh[onde_file.file_object_dict[obj].hdf5_path].ref
+                    pass
+                pass
+            pass
+        
+        pass
     
     def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 dataset
@@ -1416,6 +1448,26 @@ class ONDEReferenceArray(ONDEBase):
         instance = cls(None,refs = refs, shape = np_h5ref_array.shape)
         return instance
     
+    @classmethod
+    def load_from_hdf5_group(cls,onde_file,fileobjs_by_h5path,h5_fh,h5_group):
+        shape = ast.literal_eval(h5_group.attrs["shape"])
+
+        refs  = np.empty(shape,dtype = "O")
+        nditer = np.nditer(refs, flags = ("multi_index","refs_ok"))
+
+        for pos in nditer:
+            index_tuple = nditer.multi_index
+            subgroup_name = "(" + ",".join([f"{idx:05d}" for idx in index_tuple]) + ")"
+            if subgroup_name in h5_group:
+                # This is the actual object stored as an hdf5 group
+                refs[nditer.multi_index] = ONDEObject.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,h5_group[subgroup_name])
+                pass
+            elif subgroup_name in h5_group.attrs:
+                # This is a reference stored as an attribute not the actual object
+                refs[nditer.multi_index] = ONDEObject.load_from_hdf5(onde_file,fileobjs_by_h5path,h5_fh,h5_fh[h5_group.attrs[subgroup_name]])
+            pass
+        instance = cls(None,refs = refs, shape = shape)
+        return instance
     pass
 
 
@@ -1749,6 +1801,9 @@ class ONDEObject(ONDEBase):
                         value._hdf5_write_group(onde_file,gr,gr.name,obj_name,hierarchical_write)
                         pass
                     pass
+                elif enable_hierarchical and onde_file.hierarchical and hierarchical_write and isinstance(value,ONDEReferenceArray):
+                    value._hdf5_write_group(onde_file,gr,gr.name,attrname,hierarchical_write)
+                    pass
                 else:
                     # Nonhierarchical mode or non-ONDEObject. We write an hdf5 reference as an attribute.
                     value._hdf5_write_attribute(onde_file,gr,gr.name,attrname,None,hierarchical_write)
@@ -1877,7 +1932,14 @@ class ONDEObject(ONDEBase):
                     pass
                 pass
             elif enable_hierarchical and isinstance(subobj,h5py.Group): # These lines will enable support for hierarchical ONDE files
-                attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, subobj)
+                if not "ONDE:TYPE" in subobj.attrs and "shape" in subobj.attrs:
+                    # Must be an ONDEReferenceArray stored as an hdf5 group
+                    attr_obj = ONDEReferenceArray.load_from_hdf5_group(onde_file,fileobjs_by_h5path,h5_fh,subobj)
+                    pass
+                else:
+                    
+                    attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, subobj)
+                    pass
                 _ONDE_attrs[subname] = attr_obj
                 pass
             else:
