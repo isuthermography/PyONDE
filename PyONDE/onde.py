@@ -1363,7 +1363,7 @@ class ONDEReferenceArray(ONDEBase):
         gr = parent.create_group(name)
 
         byindex = self.refs.byindex
-        gr.attrs["shape"] = str(byindex.shape)
+        gr.attrs["ONDE:SHAPE"] = byindex.shape
         assert(hierarchical_write)
         nditer = np.nditer(byindex, flags = ("multi_index","refs_ok"))
 
@@ -1450,8 +1450,9 @@ class ONDEReferenceArray(ONDEBase):
     
     @classmethod
     def load_from_hdf5_group(cls,onde_file,fileobjs_by_h5path,h5_fh,h5_group):
-        shape = ast.literal_eval(h5_group.attrs["shape"])
-
+        #shape = ast.literal_eval(h5_group.attrs["shape"])
+        shape = tuple(h5_group.attrs["ONDE:SHAPE"])
+        
         refs  = np.empty(shape,dtype = "O")
         nditer = np.nditer(refs, flags = ("multi_index","refs_ok"))
 
@@ -1932,7 +1933,7 @@ class ONDEObject(ONDEBase):
                     pass
                 pass
             elif enable_hierarchical and isinstance(subobj,h5py.Group): # These lines will enable support for hierarchical ONDE files
-                if not "ONDE:TYPE" in subobj.attrs and "shape" in subobj.attrs:
+                if not "ONDE:TYPE" in subobj.attrs and "ONDE:SHAPE" in subobj.attrs:
                     # Must be an ONDEReferenceArray stored as an hdf5 group
                     attr_obj = ONDEReferenceArray.load_from_hdf5_group(onde_file,fileobjs_by_h5path,h5_fh,subobj)
                     pass
