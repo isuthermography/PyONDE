@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Any
 import numpy as np
 
+enable_hierarchical = False
+
 onde_basic_attrs = {
             "ONDEValue":(
                 "_freeze",
@@ -814,12 +816,12 @@ class ONDEBase(object):
         """
         raise ValueError("ONDEBase does not have content to write")
 
-    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 dataset
         """
         raise ValueError("ONDEBase does not have content to write")
 
-    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 attribute
         """
         raise ValueError("ONDEBase does not have content to write")
@@ -965,7 +967,7 @@ class ONDEValue(ONDEBase):
                            **extra_attrs)
 
 
-    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 attribute
         """
         parent.attrs[name] = self.value
@@ -1124,13 +1126,13 @@ class ONDEArray(ONDEBase):
                            shape=str(object.__getattribute__(self, 'value').shape),
                            **extra_attrs)
 
-    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 attribute
         """
         parent.attrs[name] = self.value
         pass
     
-    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 dataset
         """
         ds = parent.create_dataset(name,data = self.value)
@@ -1323,7 +1325,7 @@ class ONDEReferenceArray(ONDEBase):
                            shape=str(object.__getattribute__(self, 'refs')._shape),
                            **extra_attrs)
 
-    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj, hierarchical_write):
         """Write this object to a new hdf5 attribute
         """
         ref_dtype = h5py.special_dtype(ref = h5py.Reference)
@@ -1336,6 +1338,17 @@ class ONDEReferenceArray(ONDEBase):
             obj = objarray[()]
             if obj is not None:
                 # !!!*** This may need to be accelerated by caching the hdf5 object references per the various discussions on h5py indexing performance with Paul Wilcox, early 2026. https://github.com/COFREND/ONDE-format/issues/24
+
+                if enable_hierarchical and hierarchical_write and obj not in onde_file.file_object_dict:
+                    # This object has not been inserted yet, and this being a reference array, we cannot insert it here. So instead, place it in the PyONDE_DB
+
+                    obj_name = f"{onde_file.db_maxidx + 1:05d}"
+                    onde_file.db_maxidx += 1
+                    
+                    obj._hdf5_write_group(onde_file,onde_file.fh["PyONDE_DB"],"/PyONDE_DB",obj_name,hierarchical_write)
+                    pass
+                
+                    
                 h5_byindex[nditer.multi_index] = onde_file.fh[onde_file.file_object_dict[obj].hdf5_path].ref
                 pass
             pass
@@ -1343,7 +1356,7 @@ class ONDEReferenceArray(ONDEBase):
         parent.attrs[name] = h5_byindex
         pass
     
-    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_dataset(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write this object to a new hdf5 dataset
         """
         ref_dtype = h5py.special_dtype(ref = h5py.Reference)
@@ -1356,6 +1369,16 @@ class ONDEReferenceArray(ONDEBase):
             obj = objarray[()]
             if obj is not None:
                 # !!!*** This may need to be accelerated by caching the hdf5 object references per the various discussions on h5py indexing performance with Paul Wilcox, early 2026. https://github.com/COFREND/ONDE-format/issues/24
+
+                if enable_hierarchical and hierarchical_write and obj not in onde_file.file_object_dict:
+                    # This object has not been inserted yet, and this being a reference array, we cannot insert it here. So instead, place it in the PyONDE_DB
+
+                    obj_name = f"{onde_file.db_maxidx + 1:05d}"
+                    onde_file.db_maxidx += 1
+                    
+                    obj._hdf5_write_group(onde_file,onde_file.fh["PyONDE_DB"],"/PyONDE_DB",obj_name,hierarchical_write)
+                    pass
+                
                 h5_byindex[nditer.multi_index] = onde_file.fh[onde_file.file_object_dict[obj].hdf5_path].ref
                 pass
             pass
@@ -1702,25 +1725,41 @@ class ONDEObject(ONDEBase):
             pass
         return classname
 
-    def _hdf5_write_group(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_group(self,onde_file,parent,parent_path,name,hierarchical_write = False):
         """Write this object to a new hdf5 group
         """
+
+        fileobj = ONDEFileObject(onde_instance = self,hdf5_path = posixpath.join(parent_path,name))
+        
         gr = parent.create_group(name)
         for attrname in self._ONDE_attrs:
             value = self._ONDE_attrs[attrname]
             if attrname in self._ONDE_dataset_attrs:
                 if isinstance(value,ONDEObject) or isinstance(value,ONDEValue):
                     raise ValueError(f"Error writing ONDE object of class {self._onde_class_name()}: Attribute {attrname} is marked for dataset storage, but is an {type(value).__name__} not an ONDEArray or ONDEReferenceArray")
-                value._hdf5_write_dataset(onde_file,gr,gr.name,attrname,None)
+                value._hdf5_write_dataset(onde_file,gr,gr.name,attrname,None,hierarchical_write)
                 pass
             else:
-                value._hdf5_write_attribute(onde_file,gr,gr.name,attrname,None)
+                if enable_hierarchical and onde_file.hierarchical and hierarchical_write and isinstance(value,ONDEObject):
+                    if value in onde_file.file_object_dict:
+                        value._hdf5_write_attribute(onde_file,gr,gr.name,attrname,None,hierarchical_write)
+                        pass
+                    else:
+                        obj_name = attrname
+                        value._hdf5_write_group(onde_file,gr,gr.name,obj_name,hierarchical_write)
+                        pass
+                    pass
+                else:
+                    # Nonhierarchical mode or non-ONDEObject. We write an hdf5 reference as an attribute.
+                    value._hdf5_write_attribute(onde_file,gr,gr.name,attrname,None,hierarchical_write)
+                    pass
                 pass
             pass
+        onde_file.file_object_dict[self] = fileobj
         
         pass
     
-    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj):
+    def _hdf5_write_attribute(self,onde_file,parent,parent_path,name,onde_fileobj,hierarchical_write):
         """Write a reference to this object to a new hdf5 attribute
         """
         parent.attrs[name] = onde_file.fh[onde_file.file_object_dict[self].hdf5_path].ref
@@ -1837,9 +1876,10 @@ class ONDEObject(ONDEBase):
                     _ONDE_dataset_attrs.add(subname)
                     pass
                 pass
-            # elif isinstance(subobj,h5py.Group): # These lines will enable support for hierarchical ONDE files
-            #     attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, subobj)
-            #     _ONDE_attrs[subname] = attr_obj
+            elif enable_hierarchical and isinstance(subobj,h5py.Group): # These lines will enable support for hierarchical ONDE files
+                attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, subobj)
+                _ONDE_attrs[subname] = attr_obj
+                pass
             else:
                 raise ValueError(f"Unknown h5type {type(subobj).__name__:s} at hdf5 path {h5_group.name:s}")
             pass
@@ -3557,15 +3597,18 @@ class ONDEFile(object):
     db_maxidx = None # integer representing the highest index used in the PyONDE_DB hdf5 group
     version = None
     filetype = None
+    hierarchical = None
+    file_is_blank = None
     
-    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None,version = None, filetype = None):
+    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None,version = None, filetype = None, hierarchical = False):
         self.class_defs = class_defs
         self.h5path = h5path
         self.mode = mode
         self.fh = fh
         self.version = version
         self.filetype = filetype
-
+        self.hierarchical = hierarchical
+        self.file_is_blank = True
         self.file_object_dict = {}
         self.graph = ONDEFileGraph(class_defs = self.class_defs)
 
@@ -3573,7 +3616,7 @@ class ONDEFile(object):
             raise ValueError(f"Unknown mode: {self.mode:s}")
         
         if self.mode == "r+" or self.mode == "a" or self.mode == "r":
-            
+            self.file_is_blank = False
             if version is not None:
                 raise ValueError("Attempting to set ONDE_VERSION on existing file.")
             if filetype is not None:
@@ -3707,25 +3750,56 @@ class ONDEFile(object):
             fileobj.close()
             del self.file_object_dict[obj]
             pass
-        
 
-        # add in the needed objects. Loop ordering is because needed_objs is actually an OrderedDict.
-        for needed_obj in needed_objs:
-            if not needed_obj in to_add:
-                continue
+        if enable_hierarchical and self.hierarchical and self.file_is_blank:
+            # Perform hierarchical write
+            # Only designed for new files, at least so far.
 
-            obj_name = f"{self.db_maxidx + 1:05d}"
-            self.db_maxidx += 1
+            # Iterate through the various needed_objs, which remember
+            # are ordered leaf first, to get the various datasets
+            # to add to the root
+            for needed_obj in needed_objs:
+                assert(needed_obj in to_add)
 
-            fileobj = ONDEFileObject(onde_instance = needed_obj,hdf5_path = posixpath.join(db_path,obj_name))
+                if isinstance(needed_obj, ONDEObject):
+                    class_derivation = needed_obj["ONDE:TYPE"]
+                    baseclass = class_derivation.value[0]
+                    if baseclass == "ONDE_DATASET":
+                        # Write this dataset
+                        obj_name = needed_obj["ONDE:UUID"].value[5:9] # Skip the 5 characters of the "2.25." and just use the first 4 digits.
+                        while obj_name in self.fh:
+                            # Guarantee uniqueness
+                            obj_name += "_"
+                            pass
+                                                
 
-            needed_obj._hdf5_write_group(onde_file = self,parent = db,parent_path = db_path,name = obj_name,onde_fileobj = fileobj)
-
-            self.file_object_dict[needed_obj] = fileobj
+                        needed_obj._hdf5_write_group(onde_file = self,parent = self.fh,parent_path = "/",name = obj_name, hierarchical_write = True)
+                        pass
+                    pass
+                pass
         
             pass
+        else:
+            # Write all objects into PyONDE_DB group
+
+            # add in the needed objects. Loop ordering is because needed_objs is actually an OrderedDict.
+            for needed_obj in needed_objs:
+                if not needed_obj in to_add:
+                    continue
+                
+                obj_name = f"{self.db_maxidx + 1:05d}"
+                self.db_maxidx += 1
+                
+                #fileobj = ONDEFileObject(onde_instance = needed_obj,hdf5_path = posixpath.join(db_path,obj_name))
+
+                needed_obj._hdf5_write_group(onde_file = self,parent = db,parent_path = db_path,name = obj_name)
+
+                #self.file_object_dict[needed_obj] = fileobj
         
-                                    
+                pass
+            pass
+        
+        self.file_is_blank = False
         self.fh.flush()
         pass
 
@@ -3759,7 +3833,7 @@ class ONDEFile(object):
         return self._repr(0)
     
     @classmethod
-    def new(cls, h5path, mode, class_defs_path=None, extra_class_defs = None, onde_version = None):
+    def new(cls, h5path, mode, class_defs_path=None, extra_class_defs = None, onde_version = None, hierarchical = False):
         fh = h5py.File(h5path, mode)
         
         class_defs = None
@@ -3770,7 +3844,7 @@ class ONDEFile(object):
             class_defs = ONDEClassDefinitions.load_from_csv(class_defs_path,extra_class_defs = extra_class_defs)
             pass
         
-        return cls(class_defs = class_defs, h5path = h5path, mode = mode, fh = fh)
+        return cls(class_defs = class_defs, h5path = h5path, mode = mode, fh = fh, hierarchical = hierarchical)
     
     pass
 
