@@ -13,6 +13,11 @@ More information and documentation in the doc/ folder and at
 https://isuthermography.github.io/PyONDE/ and at
 https://github.com/isuthermography/PyONDE
 
+Acknowledgments
+---------------
+
+Thanks to Abhigyaan Deep for helping with some of the coating
+
 
    Copyright 2026 Stephen D. Holland and Iowa State University
    Research Foundation
