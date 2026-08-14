@@ -23,6 +23,8 @@ onde_basic_attrs = {
             "ONDEValue":(
                 "_freeze",
                 "_frozen",
+                "_referencedby",
+                "_file_realizations",
                 "_get_attr",
                 "_get_data",
                 "_set_attr",
@@ -33,6 +35,8 @@ onde_basic_attrs = {
             "ONDEArray":(
                 "_freeze",
                 "_frozen",
+                "_referencedby",
+                "_file_realizations",
                 "_get_attr",
                 "_get_data",
                 "_set_attr",
@@ -43,6 +47,8 @@ onde_basic_attrs = {
             "ONDEReferenceArray":(
                 "_freeze",
                 "_frozen",
+                "_referencedby",
+                "_file_realizations",
                 "_get_attr",
                 "_get_data",
                 "_get_item",
@@ -55,6 +61,8 @@ onde_basic_attrs = {
             "ONDEObject":(
                 "_freeze",
                 "_frozen",
+                "_referencedby",
+                "_file_realizations",
                 "_get_attr",
                 "_set_attr",
                 "_has_attr",
@@ -239,7 +247,7 @@ class TwoWayDictionary(object):
             pass
         pass
 
-    def _del_attr(self,name):
+    def _del_attr(self,name,valueignored):
         _bystrings = object.__getattribute__(self, "_bystrings")
         _byobjid = object.__getattribute__(self, "_byobjid")
         _lock = object.__getattribute__(self, "_lock")
@@ -269,7 +277,7 @@ class TwoWayDictionary(object):
         return self._get_attr(name)
 
     def __delitem__(self,name):
-        return self._del_attr(name)
+        return self._del_attr(name,None)
     
     def _freeze(self):
         object.__setattr__(self, "_frozen", True)
@@ -1542,7 +1550,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1565,6 +1573,25 @@ class ONDEObject(ONDEBase):
 
     def _set_item(self,name,value):
         return self._set_attr(name,value)
+    
+    def _del_item(self,name,valueignored):
+        """
+        Set the named conceptual attribute of an ONDE object. Use _set_dataset_attr() instead if the attribute should have hdf5 dataset storage.
+        """
+        _frozen = object.__getattribute__(self, "_frozen")
+        if _frozen:
+            raise RuntimeError("Attempting to modify an object that is already frozen")
+
+       
+        if name.startswith("_"):
+            raise ValueError(f"Attributes such as \"{name:s}\" with leading underscores not allowed")
+
+        _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
+        _ONDE_dataset_attrs = object.__getattribute__(self, "_ONDE_dataset_attrs")
+      
+        _ONDE_dataset_attrs.discard(name)
+        return _ONDE_attrs._del_attr(name, valueignored)
+        
     
     def __getitem__(self,name):
         return self._get_attr(name)
@@ -1666,7 +1693,7 @@ class ONDEObject(ONDEBase):
     
     def __dir__(self):
         _ONDE_attrs = object.__getattribute__(self, "_ONDE_attrs")
-        return ["_freeze","_frozen"] + [attrname for attrname in _ONDE_attrs]
+        return ["_freeze","_frozen","_referencedby","_file_realizations"] + [attrname for attrname in _ONDE_attrs]
     
     def _freeze(self):
         _frozen = object.__getattribute__(self, "_frozen")
@@ -1907,9 +1934,18 @@ class ONDEObject(ONDEBase):
                     pass
                 pass
             elif isinstance(h5_attr,h5py.Reference):
-                attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, h5_fh[h5_attr])
-                _ONDE_attrs[attrname] = attr_obj
-           
+                ref=h5_fh[h5_attr]
+                if isinstance(ref,h5py.Dataset):
+                    # ONDE_DATASET:DATA is uniquely allowed to be a reference to an HDF5 dataset
+                    # Array of values
+                    attr_obj = ONDEArray.new(value = ref[...])
+                    _ONDE_attrs[attrname] = attr_obj
+                    _ONDE_dataset_attrs.add(attrname)
+                    pass
+                else:
+                    attr_obj = ONDEObject.load_from_hdf5(onde_file, fileobjs_by_h5path, h5_fh, ref)
+                    _ONDE_attrs[attrname] = attr_obj
+                    pass
                 pass
             else:
                 raise ValueError(f"Unknown hdf5 attribute type: {type(h5_attr).__name__:s}")
@@ -2308,12 +2344,12 @@ class ONDEClassInstanceWrapper(object):
         
         full_name = key
         field = None
-        if set_method_name == "_set_attr" or set_method_name == "_set_dataset_attr":
-            (full_name, field) = self._full_fieldname_from_attrname(_graph, our_obj, key)       
-            if full_name is None:
-                full_name = key
-                pass
+        #if set_method_name == "_set_attr" or set_method_name == "_set_dataset_attr":
+        (full_name, field) = self._full_fieldname_from_attrname(_graph, our_obj, key)       
+        if full_name is None:
+            full_name = key
             pass
+        
 
         if field is not None and set_method_name == "_set_attr":
             # For now, if field.storage is "A or D", we always just store it as a dataset.
@@ -2321,8 +2357,20 @@ class ONDEClassInstanceWrapper(object):
                 set_method_name = "_set_dataset_attr"
                 pass
             pass
-        
-        if isinstance(value,ONDEClassInstanceWrapper):
+        if set_method_name == "_del_item" or isinstance(value,ONDEProxy) or isinstance(value,ONDEBase):
+            if our_proxy is not None:
+                set_method = getattr(our_proxy,set_method_name)
+                set_method(full_name,value)
+                pass
+            elif our_obj is not None:
+                set_method = getattr(our_obj,set_method_name)
+                set_method(full_name,value)
+                pass
+            else:
+                assert(False)
+                pass
+            pass
+        elif isinstance(value,ONDEClassInstanceWrapper):
             target_proxy = object.__getattribute__(value,"_proxy")
             target_obj = object.__getattribute__(value,"_obj")
             if our_proxy is not None and target_proxy is not None:
@@ -2345,32 +2393,7 @@ class ONDEClassInstanceWrapper(object):
                 assert(False) # Exactly one of _obj and _proxy should be valid
                 pass
             pass
-        elif isinstance(value,ONDEProxy):
-            if our_proxy is not None:
-                set_method = getattr(our_proxy,set_method_name)
-                set_method(full_name,value)
-                pass
-            elif our_obj is not None:
-                set_method = getattr(our_obj,set_method_name)
-                set_method(full_name,value._get_obj())
-                pass
-            else:
-                assert(False)
-                pass
-            pass
-        elif isinstance(value,ONDEBase):
-            if our_proxy is not None:
-                set_method = getattr(our_proxy,set_method_name)
-                set_method(full_name,value)
-                pass
-            elif our_obj is not None:
-                set_method = getattr(our_obj,set_method_name)
-                set_method(full_name,value)
-                pass
-            else:
-                assert(False)
-                pass
-            pass
+
         else:
             #raise ValueError(f"Attribute values should be ONDEBase or ONDEProxy or ONDEClassInstanceWrapper")
             #build an object from python structures
@@ -2407,6 +2430,10 @@ class ONDEClassInstanceWrapper(object):
 
     def _set_item(self,index,value):
         self._set_attr_or_item("_set_item",index,value)
+        pass
+    
+    def _del_item(self,index,value):
+        self._set_attr_or_item("_del_item",index,value)
         pass
     
     def _get_data(self,name):
@@ -2645,6 +2672,10 @@ class ONDEClassInstanceWrapper(object):
 """
     def __setitem__(self,key,value):
         self._set_attr_or_item("_set_item",key,value)
+        return
+
+    def __delitem__(self,key):
+        self._set_attr_or_item("_del_item",key,None)
         return
 
     def __getitem__(self,key):
@@ -3382,7 +3413,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -3453,7 +3484,12 @@ class ONDEProxy(object):
     def _set_attr(self, name, value):
         self._set_attr_or_item_or_data('_set_attr', name, value)
         pass
+  
+    def _del_item(self, name, value):
+        self._set_attr_or_item_or_data('_del_item', name, value)
+        pass
 
+    
     def _add(self,dataset):
         """add() method for proxying ONDEFileGraphSnapshot"""
         # Must maintain parallel logic in ONDEFileGraphSnapshot.add()
@@ -3501,6 +3537,9 @@ class ONDEProxy(object):
     def __setitem__(self,index,value):
         return self._set_item(index,value)
     
+    def __delitem__(self,index):
+        return self._del_item(index,None)
+    
     def _get_data(self, name):
         obj = self._get_obj()
         data_obj = obj._get_data(name)
@@ -3517,7 +3556,7 @@ class ONDEProxy(object):
         pass
     
     def _set_attr_or_item_or_data(self, set_method_name, key, value):
-        ''' Use the named set method (_set_attr,_set_dataset_attr, _set_item, or  _set_data) to assign the element specified by key to the given value'''
+        ''' Use the named set method (_set_attr,_set_dataset_attr, _set_item,  _set_data, or _del_item) to assign the element specified by key to the given value'''
         
         _trans = object.__getattribute__(self, "_trans")
         #import pdb
@@ -3687,9 +3726,9 @@ class ONDEFile(object):
         if self.mode == "r+" or self.mode == "a" or self.mode == "r":
             self.file_is_blank = False
             if version is not None:
-                raise ValueError("Attempting to set ONDE_VERSION on existing file.")
+                raise ValueError("Attempting to set ONDE:VERSION on existing file.")
             if filetype is not None:
-                raise ValueError("Attempting to set ONDE_FILETYPE on existing file.")
+                raise ValueError("Attempting to set ONDE:FILETYPE on existing file.")
             self.load() # Attempt to read in current contents.
             pass
      
@@ -3708,8 +3747,8 @@ class ONDEFile(object):
         return iter(self.keys())
     
     def load(self):
-        self.version = self.fh.attrs["ONDE_VERSION"]
-        self.filetype = set(self.fh.attrs["ONDE_FILETYPE"])
+        self.version = self.fh.attrs["ONDE:VERSION"]
+        self.filetype = set(self.fh.attrs["ONDE:FILETYPE"])
 
         # check for PyONDE_DB and db_maxidx
         self.db_maxidx = 0
@@ -3762,22 +3801,22 @@ class ONDEFile(object):
     def flush(self):
         snap = self.graph.latest_snap
 
-        # Ensure ONDE_FILETYPE and ONDE_VERSION are present
-        if "ONDE_VERSION" not in self.fh.attrs:
+        # Ensure ONDE:FILETYPE and ONDE:VERSION are present
+        if "ONDE:VERSION" not in self.fh.attrs:
             if self.version is not None:
-                self.fh.attrs["ONDE_VERSION"] = self.version
+                self.fh.attrs["ONDE:VERSION"] = self.version
                 pass
             else:
-                self.fh.attrs["ONDE_VERSION"] = self.class_defs.version
+                self.fh.attrs["ONDE:VERSION"] = self.class_defs.version
                 pass
             pass
 
-        if "ONDE_FILETYPE" not in self.fh.attrs:
+        if "ONDE:FILETYPE" not in self.fh.attrs:
             if self.filetype is not None:
-                self.fh.attrs["ONDE_FILETYPE"] = list(self.filetype)
+                self.fh.attrs["ONDE:FILETYPE"] = list(self.filetype)
                 pass
             else:
-                self.fh.attrs["ONDE_FILETYPE"] = ["ONDE_DATASET"]
+                self.fh.attrs["ONDE:FILETYPE"] = ["ONDE_DATASET"]
                 pass
             pass
 
