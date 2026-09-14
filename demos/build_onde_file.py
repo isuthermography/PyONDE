@@ -27,7 +27,7 @@ value = np.cos(2*np.pi*800e3*t)
 
 of = ONDEDatasetFile.new(output_path, "w",
                          #class_defs_path = class_def_csv_path,
-                         onde_version = "0.9.1pre"
+                         onde_version = "0.9.2pre"
                          )
 
 ds = ONDEObject.new(of,"ONDE_DATASET_UT_ASCAN")
@@ -42,7 +42,7 @@ ds.AMPLITUDE_DIMENSION.COORDINATE = "Voltage"
 ds.AMPLITUDE_DIMENSION.OFFSET = 0.0
 ds.AMPLITUDE_DIMENSION.SCALE = 1.0
 ds.AMPLITUDE_DIMENSION.UNITS = "Volts"
-ds.DATA = ONDEArray.new(value = value)
+ds.DATA = ONDEArray.new(value = value[np.newaxis,np.newaxis,np.newaxis,:])
 ds.DATE_AND_TIME = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
 ds.INDEX_DIMENSIONS = ONDEReferenceArray.new(of,refs = np.empty(4,dtype = "O"))
 ds.INDEX_DIMENSIONS[0] = ONDEObject.new(of,"ONDE_DIMENSION")
