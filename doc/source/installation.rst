@@ -11,9 +11,14 @@ Installation
   - Python, numpy, h5py
     
 * Change to directory and install with pip::
-    
+
     cd PyONDE
     pip install .
+
+* To also install the ``ondeview`` graphical viewer, which additionally
+  requires matplotlib::
+
+    pip install ".[viewer]"
 
 
     

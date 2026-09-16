@@ -10,6 +10,7 @@ PyONDE Documentation
    installation
    quickstart
    architecture
+   viewer
    modules
 
 

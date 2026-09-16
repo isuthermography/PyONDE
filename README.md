@@ -13,6 +13,26 @@ More information and documentation in the doc/ folder and at
 https://isuthermography.github.io/PyONDE/ and at
 https://github.com/isuthermography/PyONDE
 
+Viewing ONDE files
+------------------
+
+PyONDE includes ``ondeview``, a dimension-driven viewer for the data in an ONDE
+file, built entirely on matplotlib and matplotlib.widgets::
+
+    pip install PyONDE[viewer]
+    ondeview --list scan.onde     # datasets, shapes, axes (no matplotlib needed)
+    ondeview scan.onde            # the interactive viewer
+
+It shows any DATA array with one or two axes mapped to the display and a slider
+fixing each of the rest, reading the coordinates, units and calibration from
+INDEX_DIMENSIONS, so an A-scan file opens as a waveform and a T-scan file as a
+zone image without either being a special case.  Slices and figures can be
+exported, and a second window shows the ONDE subgraph behind the dataset.
+
+See doc/source/viewer.rst, or https://isuthermography.github.io/PyONDE/ , for
+details.
+
+
 Acknowledgments
 ---------------
 

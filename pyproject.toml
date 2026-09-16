@@ -8,6 +8,15 @@ classifiers = [
 	    "Development Status :: 3 - Alpha"
 	    ]
 
+[project.optional-dependencies]
+# The viewer's model layer needs nothing beyond PyONDE's own dependencies;
+# only the interactive front end needs matplotlib, so it ships as an extra:
+#   pip install PyONDE[viewer]
+viewer = ["matplotlib >= 3.7"]
+
+[project.scripts]
+ondeview = "PyONDE.bin.ondeview:main"
+
 #[project.scripts]
 #example_script = "PyONDE.bin.example_script:main"
 
