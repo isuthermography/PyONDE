@@ -1908,6 +1908,10 @@ class ONDEObject(ONDEBase):
             if not ":" in attrname:
                 raise ValueError(f"Error loading fields from hdf5 group {h5_group.name:s} in file {onde_file.h5path:s}: field name {attrname:s} does not contain a colon separator between the defining class and the name.")
             h5_attr = h5_group.attrs[attrname]
+            if isinstance(h5_attr,bytes):
+                # Scalar HDF5 fixed-length string; decode as above.
+                h5_attr = h5_attr.decode("utf-8",errors="replace")
+                pass
             if isinstance(h5_attr,str) or isinstance(h5_attr,int) or isinstance(h5_attr,float):
                 attr_obj = ONDEValue.new(h5_attr)
                 _ONDE_attrs[attrname] = attr_obj
@@ -1916,7 +1920,17 @@ class ONDEObject(ONDEBase):
             elif isinstance(h5_attr,np.ndarray):
                 string_info = h5py.check_string_dtype(h5_attr.dtype)
                 if string_info is not None:
-                    # array of strings
+                    # array of strings. HDF5 fixed-length strings come back
+                    # from h5py as bytes ("S" dtype); decode them here so that
+                    # everything downstream -- class name comparisons,
+                    # add() validation, flush() -- sees str, as it does for
+                    # variable-length strings.
+                    if h5_attr.dtype.kind == "S":
+                        h5_attr = np.array(
+                            [element.decode(string_info.encoding,errors="replace")
+                             for element in h5_attr.ravel()],
+                            dtype=h5py.string_dtype()).reshape(h5_attr.shape)
+                        pass
                     pass
 
                 # Check if hdf5 reference
