@@ -2073,7 +2073,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
                     break
                 if num_chars_for_unique == len(shortable_key):
                     #Didn't find any prefix
-                    shortable_keys[shortable_key] = shortable_key
+                    shortable_keys[shortable_key] = shortable_key[5:]
                     pass
                 pass
             pass
@@ -3681,7 +3681,7 @@ def _search_h5_for_onde_datasets(h5_fh,h5_group,dataset_h5_groups,h5_groups_seen
     h5_groups_seen is a set of hdf5 group paths seen during the traversal
     """
 
-    if "ONDE:TYPE" in h5_group.attrs and h5_group.attrs["ONDE:TYPE"][0] == "ONDE_DATASET":
+    if "ONDE:TYPE" in h5_group.attrs and (h5_group.attrs["ONDE:TYPE"][0] == "ONDE_DATASET" or h5_group.attrs["ONDE:TYPE"][0] == b"ONDE_DATASET"):
         dataset_h5_groups[h5_group.name] = h5_group
         pass
 
