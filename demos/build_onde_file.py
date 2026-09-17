@@ -27,7 +27,7 @@ value = np.cos(2*np.pi*800e3*t)
 
 of = ONDEDatasetFile.new(output_path, "w",
                          #class_defs_path = class_def_csv_path,
-                         onde_version = "0.9.1pre"
+                         onde_version = "0.9.2pre"
                          )
 
 ds = ONDEObject.new(of,"ONDE_DATASET_UT_ASCAN")
@@ -42,7 +42,7 @@ ds.AMPLITUDE_DIMENSION.COORDINATE = "Voltage"
 ds.AMPLITUDE_DIMENSION.OFFSET = 0.0
 ds.AMPLITUDE_DIMENSION.SCALE = 1.0
 ds.AMPLITUDE_DIMENSION.UNITS = "Volts"
-ds.DATA = ONDEArray.new(value = value)
+ds.DATA = ONDEArray.new(value = value[np.newaxis,np.newaxis,np.newaxis,:])
 ds.DATE_AND_TIME = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
 ds.INDEX_DIMENSIONS = ONDEReferenceArray.new(of,refs = np.empty(4,dtype = "O"))
 ds.INDEX_DIMENSIONS[0] = ONDEObject.new(of,"ONDE_DIMENSION")
@@ -76,18 +76,18 @@ ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0] = ONDEObject.new(of,"ONDE_SPA
 ds.SETUP.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY[0].TRAJECTORY = ONDEArray.new(value = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT = ONDEObject.new(of,"ONDE_COMPONENT")
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT.VELOCITIES = ONDEArray.new(value = [np.nan,np.nan])
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST = ONDEReferenceArray.new(of,shape = (1,))
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0] = ONDEObject.new(of,"ONDE_UT_PROBE")
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING = ONDEObject.new(of,"ONDE_UT_COUPLING")
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING.INCIDENCE_ANGLE = 0.0
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING.MEDIUM_VELOCITY = ONDEArray.new(shape = (2,))
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING.MEDIUM_VELOCITY[0] = np.nan
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].COUPLING.MEDIUM_VELOCITY[1] = np.nan
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].FRAME = ONDEArray.new(value = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].FREQUENCY = 1e6 # Hz
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST = ONDEReferenceArray.new(of,shape = (1,))
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0] = ONDEObject.new(of,"ONDE_UT_PROBE")
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING = ONDEObject.new(of,"ONDE_UT_COUPLING")
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.INCIDENCE_ANGLE = 0.0
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY = ONDEArray.new(shape = (2,))
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY[0] = np.nan
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY[1] = np.nan
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].FRAME = ONDEArray.new(value = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].FREQUENCY = 1e6 # Hz
 # SHAPE type is currently documented as integer but in fact it should be a string
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].SHAPE = ONDEArray.new(value = np.array(("ELE_GEOM_RING_PART",),dtype = "O"))
-ds.SETUP.GEOMETRIC_SETUP.SENSOR_LIST[0].SIZE = ONDEArray.new(value = np.array(((0, (0.5/2)*25.4e-3, 0, 360, 0, 0),)))
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].SHAPE = ONDEArray.new(value = np.array(("ELE_GEOM_RING_PART",),dtype = "O"))
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].SIZE = ONDEArray.new(value = np.array(((0, (0.5/2)*25.4e-3, 0, 360, 0, 0),)))
 ds.SETUP.ULTRASONIC_SETUP = ONDEObject.new(of,"ONDE_ULTRASONIC_SETUP")
 ds.SETUP.ULTRASONIC_SETUP.ASCAN_SAMPLE_RATE = 1/dt
 ds.SETUP.ULTRASONIC_SETUP.ASCAN_START = ONDEArray.new(value = np.array(0.0))
