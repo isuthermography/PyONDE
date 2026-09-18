@@ -36,14 +36,15 @@ ds["ONDE:TYPE"]
 #of.graph["ds"] = ds
 #ds = of.graph["ds"]
 ds.LABEL = "First dataset"
-ds.UUID = generate_onde_uuid("ISUCNDE",str(uuid.getnode()),datetime.now(),"")
+timestamp = datetime.now().astimezone()
+ds.UUID = generate_onde_uuid("ISUCNDE",str(uuid.getnode()),timestamp,"")
 ds.AMPLITUDE_DIMENSION = ONDEObject.new(of,"ONDE_DIMENSION")
 ds.AMPLITUDE_DIMENSION.COORDINATE = "Voltage"
 ds.AMPLITUDE_DIMENSION.OFFSET = 0.0
 ds.AMPLITUDE_DIMENSION.SCALE = 1.0
 ds.AMPLITUDE_DIMENSION.UNITS = "Volts"
 ds.DATA = ONDEArray.new(value = value[np.newaxis,np.newaxis,np.newaxis,:])
-ds.DATE_AND_TIME = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+ds.DATE_AND_TIME = timestamp.isoformat(timespec="microseconds")
 ds.INDEX_DIMENSIONS = ONDEReferenceArray.new(of,refs = np.empty(4,dtype = "O"))
 ds.INDEX_DIMENSIONS[0] = ONDEObject.new(of,"ONDE_DIMENSION")
 ds.INDEX_DIMENSIONS[0].COORDINATE = "U Position"
