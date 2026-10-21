@@ -18,7 +18,8 @@ from typing import Optional, Any
 import numpy as np
 
 enable_hierarchical = False
-
+# standard prefix on ONDE_DATASET:UUID
+UUID_prefix='urn:uuid:'
 onde_basic_attrs = {
             "ONDEValue":(
                 "_freeze",
@@ -1912,7 +1913,7 @@ class ONDEObject(ONDEBase):
                 # Scalar HDF5 fixed-length string; decode as above.
                 h5_attr = h5_attr.decode("utf-8",errors="replace")
                 pass
-            if isinstance(h5_attr,str) or isinstance(h5_attr,int) or isinstance(h5_attr,float):
+            if isinstance(h5_attr,str) or isinstance(h5_attr,int) or isinstance(h5_attr,float)  or isinstance(h5_attr,np.integer):
                 attr_obj = ONDEValue.new(h5_attr)
                 _ONDE_attrs[attrname] = attr_obj
                 pass
@@ -2036,7 +2037,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
         if index in keys:
             return ONDEObject._get_attr(self,index)
 
-        prefixed = "urn:uuid:" + index
+        prefixed = UUID_prefix + index
         matching = [ key for key in keys if key.startswith(prefixed) ]
         if len(matching) == 1:
             return ONDEObject._get_attr(self,matching[0])
@@ -2069,25 +2070,26 @@ class ONDEFileGraphSnapshot(ONDEObject):
         return self._list_items()
 
     def shortkeys(self):
+        
         full_keys = self._list_items()
         # shortable_keys is a dictionary listing all of the keys that we can use a shorthand for (i.e. those starting with urn:uuid:.). Values are intialized to none but will be populated with the shorthand eventually
-        shortable_keys = { key: None for key in full_keys if key.startswith("urn:uuid:") }
+        shortable_keys = { key: None for key in full_keys if key.startswith(UUID_prefix) }
         shortable_key_set = frozenset(shortable_keys.keys())
         #import pdb
         #pdb.set_trace()
         for shortable_key in shortable_key_set:
             for num_chars_for_unique in range(4,len(shortable_key)+1):
-                prefix = shortable_key[:(5 + num_chars_for_unique)]
-                num_keys_matching_prefix = len([ key for key in shortable_key_set if key[:(5 + num_chars_for_unique)] == prefix ])
+                prefix = shortable_key[:(len(UUID_prefix) + num_chars_for_unique)]
+                num_keys_matching_prefix = len([ key for key in shortable_key_set if key[:(len(UUID_prefix) + num_chars_for_unique)] == prefix ])
                 if prefix in full_keys:
                     num_keys_matching_prefix += 1
                     pass
                 if num_keys_matching_prefix == 1:
-                    shortable_keys[shortable_key] = prefix[5:]
+                    shortable_keys[shortable_key] = prefix[len(UUID_prefix):]
                     break
                 if num_chars_for_unique == len(shortable_key):
                     #Didn't find any prefix
-                    shortable_keys[shortable_key] = shortable_key[5:]
+                    shortable_keys[shortable_key] = shortable_key[len(UUID_prefix):]
                     pass
                 pass
             pass
@@ -3888,7 +3890,7 @@ class ONDEFile(object):
                     baseclass = class_derivation.value[0]
                     if baseclass == "ONDE_DATASET":
                         # Write this dataset
-                        obj_name = needed_obj["ONDE:UUID"].value[9:13] # Skip the 9 characters of the "urn:uuid:" and just use the first 4 digits.
+                        obj_name = needed_obj["ONDE:UUID"].value[len(UUID_prefix):(len(UUID_prefix)+4)] # Skip the 9 characters of the "urn:uuid:" and just use the first 4 digits.
                         while obj_name in self.fh:
                             # Guarantee uniqueness
                             obj_name += "_"
