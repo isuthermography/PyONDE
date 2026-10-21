@@ -2036,7 +2036,7 @@ class ONDEFileGraphSnapshot(ONDEObject):
         if index in keys:
             return ONDEObject._get_attr(self,index)
 
-        prefixed = "2.25." + index
+        prefixed = "urn:uuid:" + index
         matching = [ key for key in keys if key.startswith(prefixed) ]
         if len(matching) == 1:
             return ONDEObject._get_attr(self,matching[0])
@@ -2070,8 +2070,8 @@ class ONDEFileGraphSnapshot(ONDEObject):
 
     def shortkeys(self):
         full_keys = self._list_items()
-        # shortable_keys is a dictionary listing all of the keys that we can use a shorthand for (i.e. those starting with 2.25.). Values are intialized to none but will be populated with the shorthand eventually
-        shortable_keys = { key: None for key in full_keys if key.startswith("2.25.") }
+        # shortable_keys is a dictionary listing all of the keys that we can use a shorthand for (i.e. those starting with urn:uuid:.). Values are intialized to none but will be populated with the shorthand eventually
+        shortable_keys = { key: None for key in full_keys if key.startswith("urn:uuid:") }
         shortable_key_set = frozenset(shortable_keys.keys())
         #import pdb
         #pdb.set_trace()
@@ -3888,7 +3888,7 @@ class ONDEFile(object):
                     baseclass = class_derivation.value[0]
                     if baseclass == "ONDE_DATASET":
                         # Write this dataset
-                        obj_name = needed_obj["ONDE:UUID"].value[5:9] # Skip the 5 characters of the "2.25." and just use the first 4 digits.
+                        obj_name = needed_obj["ONDE:UUID"].value[9:13] # Skip the 9 characters of the "urn:uuid:" and just use the first 4 digits.
                         while obj_name in self.fh:
                             # Guarantee uniqueness
                             obj_name += "_"

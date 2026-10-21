@@ -14,4 +14,4 @@ output_path = os.path.join(tempfile.gettempdir(), "pyonde_build_onde_file_output
 
 of = ONDEDatasetFile.new(output_path, "r",
                          #class_defs_path = class_def_csv_path,
-                         onde_version = "0.9.1pre")
+                         onde_version = "0.9.2")

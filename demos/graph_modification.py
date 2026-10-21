@@ -6,7 +6,7 @@ leaf2 = onde.ONDEValue.new("leaf value 2", _frozen = True)
 leaf3 = onde.ONDEValue.new("leaf value 3", _frozen = True)
 array = onde.ONDEArray.new(["string1","string2"], _frozen = True)
 obj = onde.ONDEObject.new(None, None, ONDE_TYPE = onde.ONDEArray.new(["ONDE_DATASET"], _frozen=True), **{"TEST:leaf":leaf})
-obj["ONDE:UUID"] = onde.ONDEValue.new("2.25.123456", _frozen = True)
+obj["ONDE:UUID"] = onde.ONDEValue.new("urn:uuid:01234567-89ab-cdef-0123-456789abcdef", _frozen = True)
 obj["TEST:leaf2"] = leaf2
 obj["TEST:leaf_secondreference"] = leaf
 obj["TEST:leaf3"] = leaf3
@@ -22,19 +22,19 @@ graph = onde.ONDEFileGraph.new(None,snapshot)
 with onde.ONDETransaction(graph) as tr:
     #import pdb
     #pdb.set_trace()
-    tr.graph["123456"]["TEST:leaf2"].value = 5.0
+    tr.graph["0123456"]["TEST:leaf2"].value = 5.0
     pass
 
-graph["123456"]["TEST:leaf"].value = 7.0
+graph["0123456"]["TEST:leaf"].value = 7.0
 
-assert(graph["123456"]["TEST:leaf"].value == 7.0)
-assert(snapshot["123456"]["TEST:leaf"].value == "leaf value")
-assert(graph["123456"]["TEST:leaf_secondreference"].value == "leaf value")
+assert(graph["0123456"]["TEST:leaf"].value == 7.0)
+assert(snapshot["0123456"]["TEST:leaf"].value == "leaf value")
+assert(graph["0123456"]["TEST:leaf_secondreference"].value == "leaf value")
 # In defining the scope, it would be good to be able to use a shorthand for the entry point directly.
-with onde.ONDETransaction(graph, [onde.ONDEPath((graph["123456"]["ONDE:UUID"].value,))]) as tr:
+with onde.ONDETransaction(graph, [onde.ONDEPath((graph["0123456"]["ONDE:UUID"].value,))]) as tr:
     # because of the scope specified for the transaction, this next line will change both obj.leaf and obj.leaf_secondreference
-    tr.graph["123456"]["TEST:leaf3"].value = 9.0
+    tr.graph["0123456"]["TEST:leaf3"].value = 9.0
     pass
 
-assert(graph["123456"]["TEST:leaf3"].value == 9.0)
-assert(graph["123456"]["TEST:leaf3_secondreference"].value == 9.0)
+assert(graph["0123456"]["TEST:leaf3"].value == 9.0)
+assert(graph["0123456"]["TEST:leaf3_secondreference"].value == 9.0)

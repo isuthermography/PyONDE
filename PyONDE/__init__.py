@@ -33,7 +33,7 @@ pkgdir=os.path.split(pkgpath)[0]
 onde_versions_path = os.path.join(pkgdir,"onde_versions")
 
 def generate_onde_uuid(vendor_name,equip_serial,timestamp,suffix):
-    """Generate and return an ONDE UUID string beginning with "2.25.".
+    """Generate and return an ONDE UUID string beginning with "urn:uuid:".
     If you have no way to extract an equipment serial number, suggest using the python UUID module str(uuid.getnode()) to use ethernet hardware interface information in its place. timestamp can come from datetime.now() and suffix should distinguish between multiple datasets that might have the same timestamp.""" 
     unique_string = f"{vendor_name:s} {equip_serial:s} {timestamp.isoformat(timespec='microseconds'):s} {suffix:s}"
     py_major = sys.version_info.major
@@ -49,4 +49,7 @@ def generate_onde_uuid(vendor_name,equip_serial,timestamp,suffix):
     assert(len(digest256) == 32)
     digest128 = digest256[16:]
     int128 = int.from_bytes(digest128,signed = False)
-    return f"2.25.{int128:d}"
+    # print to a hexadecimal string with 32 digits
+    hexstr = f'{int128:032x}'
+    hexstr_with_dashes = f'{hexstr[:8]}-{hexstr[8:12]}-{hexstr[12:16]}-{hexstr[16:20]}-{hexstr[20:]}'
+    return f"urn:uuid:{hexstr_with_dashes}"
