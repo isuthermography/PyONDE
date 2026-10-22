@@ -905,18 +905,25 @@ class ONDEValue(ONDEBase):
             pass
         if "value" in kwargs:
             value = copy.copy(kwargs["value"])
-            if isinstance(value, numbers.Integral):
+            if isinstance(value, numbers.Integral) or isinstance(value,np.integer):
                 value = int(value)
                 pass
-            elif isinstance(value, numbers.Real):
+            elif isinstance(value, numbers.Real) or isinstance(value,np.float32) or isinstance(value,np.float64):
                 value = float(value)
                 pass
-            elif isinstance(value, numbers.Complex):
+            elif isinstance(value, numbers.Complex) or isinstance(value,np.complex128) or isinstance(value,np.complex64):
                 value = complex(value)
                 pass
             elif isinstance(value, str) or isinstance(value,np.str_):
                 value = str(value)
                 pass
+            elif isinstance(value, bool) or isinstance(value,np.bool_):
+                value = bool(value)
+                pass
+            elif isinstance(value, int) or isinstance(value,np.integer):
+                value = int(value)
+                pass
+
             else:
                 raise ValueError(f"ONDEValue: Cannot understand value type {value.__class__.__name__:s}")
             self.value=value
@@ -1913,7 +1920,7 @@ class ONDEObject(ONDEBase):
                 # Scalar HDF5 fixed-length string; decode as above.
                 h5_attr = h5_attr.decode("utf-8",errors="replace")
                 pass
-            if isinstance(h5_attr,str) or isinstance(h5_attr,int) or isinstance(h5_attr,float)  or isinstance(h5_attr,np.integer):
+            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_):
                 attr_obj = ONDEValue.new(h5_attr)
                 _ONDE_attrs[attrname] = attr_obj
                 pass
