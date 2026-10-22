@@ -27,7 +27,7 @@ value = np.cos(2*np.pi*800e3*t)
 
 of = ONDEDatasetFile.new(output_path, "w",
                          #class_defs_path = class_def_csv_path,
-                         onde_version = "0.9.2pre"
+                         onde_version = "0.9.2"
                          )
 
 ds = ONDEObject.new(of,"ONDE_DATASET_UT_ASCAN")
@@ -36,14 +36,15 @@ ds["ONDE:TYPE"]
 #of.graph["ds"] = ds
 #ds = of.graph["ds"]
 ds.LABEL = "First dataset"
-ds.UUID = generate_onde_uuid("ISUCNDE",str(uuid.getnode()),datetime.now(),"")
+timestamp = datetime.now().astimezone()
+ds.UUID = generate_onde_uuid("ISUCNDE",str(uuid.getnode()),timestamp,"")
 ds.AMPLITUDE_DIMENSION = ONDEObject.new(of,"ONDE_DIMENSION")
 ds.AMPLITUDE_DIMENSION.COORDINATE = "Voltage"
 ds.AMPLITUDE_DIMENSION.OFFSET = 0.0
 ds.AMPLITUDE_DIMENSION.SCALE = 1.0
 ds.AMPLITUDE_DIMENSION.UNITS = "Volts"
 ds.DATA = ONDEArray.new(value = value[np.newaxis,np.newaxis,np.newaxis,:])
-ds.DATE_AND_TIME = datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+ds.DATE_AND_TIME = timestamp.isoformat(timespec="microseconds")
 ds.INDEX_DIMENSIONS = ONDEReferenceArray.new(of,refs = np.empty(4,dtype = "O"))
 ds.INDEX_DIMENSIONS[0] = ONDEObject.new(of,"ONDE_DIMENSION")
 ds.INDEX_DIMENSIONS[0].COORDINATE = "U Position"
@@ -78,11 +79,11 @@ ds.SETUP.GEOMETRIC_SETUP.COMPONENT = ONDEObject.new(of,"ONDE_COMPONENT")
 ds.SETUP.GEOMETRIC_SETUP.COMPONENT.VELOCITIES = ONDEArray.new(value = [np.nan,np.nan])
 ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST = ONDEReferenceArray.new(of,shape = (1,))
 ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0] = ONDEObject.new(of,"ONDE_UT_PROBE")
-ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING = ONDEObject.new(of,"ONDE_UT_COUPLING")
-ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.INCIDENCE_ANGLE = 0.0
-ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY = ONDEArray.new(shape = (2,))
-ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY[0] = np.nan
-ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY[1] = np.nan
+ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING = ONDEObject.new(of,"ONDE_DIRECT") # COUPLING
+#ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.INCIDENCE_ANGLE = 0.0
+#ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY = ONDEArray.new(shape = (2,))
+#ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY[0] = np.nan
+#ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].COUPLING.MEDIUM_VELOCITY[1] = np.nan
 ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].FRAME = ONDEArray.new(value = np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
 ds.SETUP.GEOMETRIC_SETUP.PROBE_LIST[0].FREQUENCY = 1e6 # Hz
 # SHAPE type is currently documented as integer but in fact it should be a string
