@@ -13,5 +13,6 @@ from PyONDE import ONDEDatasetFile
 output_path = os.path.join(tempfile.gettempdir(), "pyonde_build_onde_file_output.onde")
 
 of = ONDEDatasetFile.new(output_path, "r",
+                         filetype = {"ONDE_DATASET", "ONDE_UT"},
                          #class_defs_path = class_def_csv_path,
                          onde_version = "0.9.2")

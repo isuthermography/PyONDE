@@ -3731,30 +3731,44 @@ class ONDEFile(object):
     hierarchical = None
     file_is_blank = None
     
-    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None,version = None, filetype = None, hierarchical = False):
+    def __init__(self, class_defs = None, h5path = None, mode = None, fh = None,version = None, filetype = None, file_is_blank = False,  hierarchical = False):
         self.class_defs = class_defs
         self.h5path = h5path
         self.mode = mode
         self.fh = fh
         self.version = version
-        self.filetype = filetype
         self.hierarchical = hierarchical
-        self.file_is_blank = True
+        self.file_is_blank = file_is_blank
         self.file_object_dict = {}
         self.graph = ONDEFileGraph(class_defs = self.class_defs)
 
         if self.mode not in {"r","r+","w","w-","x","a"}:
             raise ValueError(f"Unknown mode: {self.mode:s}")
         
-        if self.mode == "r+" or self.mode == "a" or self.mode == "r":
-            self.file_is_blank = False
+        if self.mode == "r+" or self.mode == "r":
+            assert(not self.file_is_blank)
+            pass
+        if file_is_blank:
+            if filetype is None:
+                raise ValueError("No filetype given when creating a new file")
+            self.filetype = set(filetype)
+            pass
+        else:
+            # file is not blank
+            
             if version is not None:
                 raise ValueError("Attempting to set ONDE:VERSION on existing file.")
-            if filetype is not None:
-                raise ValueError("Attempting to set ONDE:FILETYPE on existing file.")
+            self.filetype = set()
             self.load() # Attempt to read in current contents.
+            
+            if filetype is not None:
+                # Check that all the tags we are given are in the filetype
+                for tag in set(filetype):
+                    if tag not in self.filetype:
+                        raise ValueError(f"Expected filetype tag {tag:s} not found when opening existing ONDE file \"{h5path:s}\"")
+                    pass
+                pass
             pass
-     
         pass
 
     def __getitem__(self,index):
@@ -3835,12 +3849,9 @@ class ONDEFile(object):
             pass
 
         if "ONDE:FILETYPE" not in self.fh.attrs:
-            if self.filetype is not None:
-                self.fh.attrs["ONDE:FILETYPE"] = list(self.filetype)
-                pass
-            else:
-                self.fh.attrs["ONDE:FILETYPE"] = ["ONDE_DATASET"]
-                pass
+            assert(self.filetype is not None)
+            self.fh.attrs["ONDE:FILETYPE"] = list(self.filetype)
+            # self.fh.attrs["ONDE:FILETYPE"] = ["ONDE_DATASET","ONDE_UT"]
             pass
 
         # Make sure PyONDE_DB HDF5 group exists.
@@ -3964,7 +3975,27 @@ class ONDEFile(object):
         return self._repr(0)
     
     @classmethod
-    def new(cls, h5path, mode, class_defs_path=None, extra_class_defs = None, onde_version = None, hierarchical = False):
+    def new(cls, h5path, mode, filetype=None, class_defs_path=None, extra_class_defs = None, onde_version = None, hierarchical = False):
+        """Create a new ONDE file or open an existing one.
+        Parameters:
+            h5path: file system path to the file to open or create
+            mode: h5py open mode ("r", "r+", "w", "w-", "x", or "a") as defined for opening h5py file objects
+            filetype: mandatory for modes w, w-, x, and a. The set of tags for the ONDE_FILETYPE. For reading an existing file, all modes must be present or an exception will be thrown. For creating a new file, these tags will be assigned into the ONDE_FILETYPE field.
+            class_defs_path: If given, load ONDE class definitions from a csv at the given path. The file name should end with ".csv".
+            extra_class_defs: Place holder for a future way to add additional class definitions to those being loaded.
+            onde_version: If class_defs_path is not given then onde_version can be a version string such as "0.9.2" to load in a set of class definitions that is embedded in the PyONDE library. These class definitions should match the code you are using to read and write the ONDE file; they do not need to match the version in the file itself.
+        """
+        if os.path.exists(h5path):
+            if mode in {"w"}:
+                file_is_blank = True
+                pass
+            else:
+                file_is_blank = False
+                pass
+            pass
+        else:
+            file_is_blank = True
+            pass
         fh = h5py.File(h5path, mode)
         
         class_defs = None
@@ -3975,7 +4006,7 @@ class ONDEFile(object):
             class_defs = ONDEClassDefinitions.load_from_csv(class_defs_path,extra_class_defs = extra_class_defs)
             pass
         
-        return cls(class_defs = class_defs, h5path = h5path, mode = mode, fh = fh, hierarchical = hierarchical)
+        return cls(class_defs = class_defs, h5path = h5path, mode = mode, fh = fh, filetype = filetype, file_is_blank = file_is_blank,  hierarchical = hierarchical)
     
     pass
 
