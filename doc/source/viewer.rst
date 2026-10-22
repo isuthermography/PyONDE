@@ -8,13 +8,23 @@ entirely on matplotlib and ``matplotlib.widgets``, with no other GUI toolkit.
 Installation
 ------------
 
-matplotlib is an optional dependency, so the viewer is installed as an extra::
+matplotlib is not declared as a dependency of PyONDE at all -- neither
+required nor an extra -- because the library, the model layer described below,
+and ``ondeview --list`` / ``ondeview --info`` all work without it.  Only the
+interactive viewer needs it, so install it yourself when you want one::
 
-  pip install PyONDE[viewer]
+  pip install matplotlib
 
-The model layer described below needs nothing beyond PyONDE's own requirements,
-so ``ondeview --list`` and ``ondeview --info`` work on a plain
-``pip install PyONDE``.
+If you open the viewer without it, ``ondeview`` says so and exits with status
+3.  It writes that message to standard error *and* puts it in a message box,
+because the viewer is the one command likely to be started from a desktop
+launcher or a file association, where there is no terminal to read it in.  The
+box is drawn with tkinter if that is installed, otherwise with the platform's
+own dialog helper (``zenity`` or ``kdialog`` on Linux, ``osascript`` on macOS,
+``MessageBoxW`` on Windows); if none of them can draw one, the message still
+reaches standard error.  Set ``ONDEVIEW_NO_DIALOG=1`` to suppress the box
+entirely, which is worth doing in scripts and CI, where a dialog nobody can
+dismiss would hang the run.
 
 Command line
 ------------
@@ -23,7 +33,7 @@ List the datasets in a file::
 
   $ ondeview --list scan.onde
   scan.onde
-    ONDE:VERSION 0.9.1   ONDE:FILETYPE ONDE_UT   read with class definitions 0.9.1pre
+    ONDE:VERSION 0.9.2   ONDE:FILETYPE ONDE_UT   read with class definitions 0.9.2
          key  type                     shape                        label
         3075  ONDE_DATASET_UT_ASCAN    3x4x2x1000 float64           Synthetic A-scan raster
 
@@ -45,8 +55,20 @@ opening nothing if the current backend cannot show a window::
 ``--onde-version`` selects which class definitions PyONDE compiles in.  It
 controls which fields are known by their short names, not what the file is
 required to contain: a file written under a different version of the
-specification still loads, and its unfamiliar fields remain reachable by their
-fully qualified ``CLASS:FIELD`` names.
+specification still loads, its data is identical either way, and its unfamiliar
+fields remain reachable by their fully qualified ``CLASS:FIELD`` names.  (v0.9.2
+renamed ``SENSOR_LIST`` to ``PROBE_LIST`` and ``FRAME`` to
+``INDEX_POINT_FRAME``, for instance, so an older file read with 0.9.2
+definitions carries fields the definitions do not know -- and the metadata
+window still shows them.)
+
+The default is ``0.9.2`` (``PyONDE.viewer.access.DEFAULT_ONDE_VERSION``),
+fixed deliberately rather than derived from whichever definitions happen to be
+installed: which definitions are in force decides how field names resolve, so it
+should be a decision rather than a side effect of a PyONDE release.  Bump the
+constant once the viewer has been checked against a newer set.  ``ondeview
+--list`` reports which set it read with, and asking for definitions PyONDE does
+not ship is reported as such rather than as a missing file.
 
 Using the viewer
 ----------------
@@ -147,6 +169,28 @@ alongside the array, while ``.npy`` is the bare array.
 A 1-D export is two columns, coordinate and amplitude.  A 2-D export puts the x
 coordinates in the first row and the y coordinates in the first column, and is
 written in display orientation -- what you exported is what you were looking at.
+
+Older files
+-----------
+
+ONDE v0.9.2 changed two things a reader meets head-on, and the viewer handles
+both without special-casing:
+
+* **UUIDs.**  v0.9.2 uses ``urn:uuid:`` followed by a hyphenated hexadecimal
+  128-bit value; earlier files carry the DICOM-style ``2.25.<decimal>`` form.
+  The specification tells readers to treat the string as opaque, so the viewer
+  never parses or reconstructs one: it takes the keys and the short keys
+  PyONDE reports, pairs them positionally, and addresses datasets by whichever
+  it was given.  A legacy key that PyONDE leaves unshortened works like any
+  other.
+* **Renamed fields.**  ``SENSOR_LIST`` and ``FRAME`` are not in the 0.9.2
+  definitions, so in an older file they resolve only by their fully qualified
+  names -- which is how the metadata window reads everything anyway, so they
+  are still shown.
+
+``PyONDE.viewer.testdata.write_legacy_file`` writes such a file, and the test
+suite reads every synthetic file under every set of definitions PyONDE ships,
+asserting the samples, axes and calibration come out identical.
 
 Metadata
 --------

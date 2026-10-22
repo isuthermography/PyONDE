@@ -44,7 +44,8 @@ def test_format_tree_renders_the_real_metadata(ascan_model):
     lines = format_tree(ascan_model.metadata_tree())
     joined = "\n".join(lines)
     assert "ONDE_DATASET:SETUP:" in joined
-    assert "ONDE_GEOMETRIC_SETUP:SENSOR_LIST:" in joined
+    # PROBE_LIST since ONDE v0.9.2; it was SENSOR_LIST before
+    assert "ONDE_GEOMETRIC_SETUP:PROBE_LIST:" in joined
     assert "ONDE_UT_PROBE:FREQUENCY: 5e+06" in joined
 
 

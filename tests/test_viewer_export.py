@@ -31,7 +31,7 @@ def test_default_filename_describes_the_slice(ascan_model):
     state = default_state_for(ascan_model).evolve(indices={0: 1, 1: 2, 2: 0})
     name = export.default_filename(ascan_model, state, ".csv")
     assert name.endswith(".csv")
-    assert "1971" in name or ascan_model.short_key in name
+    assert export._sanitize(ascan_model.short_key) in name
     assert "u_po1" in name and "v_po2" in name
 
 

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from PyONDE.viewer.model import AxisDescriptor, OndeDocument
+from PyONDE.viewer.model import AxisDescriptor
 
 from conftest import hostile_dataset
 
@@ -150,8 +150,9 @@ def test_document_separates_viewable_datasets(tscan_document):
 
 
 def test_document_reports_file_level_metadata(ascan_document):
+    from PyONDE.viewer import access
     assert ascan_document.file_version
-    assert ascan_document.onde_version == "0.9.1pre"
+    assert ascan_document.onde_version == access.DEFAULT_ONDE_VERSION
 
 
 def test_metadata_tree_walks_the_setup_and_dedupes_sharing(ascan_model):
@@ -170,13 +171,5 @@ def test_metadata_tree_respects_the_depth_cap(ascan_model):
     assert "<max depth reached>" in repr(shallow)
 
 
-def test_nested_groups_are_not_loadable_by_pyonde(onde_files):
-    """Pins a PyONDE limitation the viewer can only report, not fix.
-
-    The specification allows flexible group placement, but PyONDE's loader
-    raises on a sub-group inside a dataset group unless the module-level
-    enable_hierarchical flag is set.  If that is turned on upstream, this test
-    fails and should become a positive one.
-    """
-    with pytest.raises(ValueError, match="Unknown h5type Group"):
-        OndeDocument.open(onde_files["nested"])
+# The nested-group case moved to test_viewer_library_versions.py, where it
+# probes PyONDE's enable_hierarchical flag instead of assuming it is off.

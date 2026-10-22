@@ -19,8 +19,8 @@ Viewing ONDE files
 PyONDE includes ``ondeview``, a dimension-driven viewer for the data in an ONDE
 file, built entirely on matplotlib and matplotlib.widgets::
 
-    pip install PyONDE[viewer]
     ondeview --list scan.onde     # datasets, shapes, axes (no matplotlib needed)
+    pip install matplotlib        # only the interactive viewer needs it
     ondeview scan.onde            # the interactive viewer
 
 It shows any DATA array with one or two axes mapped to the display and a slider

@@ -15,10 +15,16 @@ Installation
     cd PyONDE
     pip install .
 
-* To also install the ``ondeview`` graphical viewer, which additionally
-  requires matplotlib::
+The ``ondeview`` command is installed either way.  Its listing modes
+(``--list``, ``--info``) need nothing further; the interactive viewer needs
+matplotlib, which PyONDE does not install for you -- it is not a requirement
+and not an extra, so that a package whose job is file access does not drag a
+plotting library in behind it::
 
-    pip install ".[viewer]"
+    pip install matplotlib
+
+Running ``ondeview`` on a file without matplotlib installed is harmless: it
+says what to install, both on the terminal and in a message box, and exits.
 
 
     

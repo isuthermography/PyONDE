@@ -79,9 +79,11 @@ def test_dataset_entries_align_keys_with_short_keys(ascan_document):
     entries = access.dataset_entries(ascan_document.onde_file)
     assert len(entries) == 1
     full_key, short_key, dataset = entries[0]
-    assert full_key.startswith("2.25.")
-    # a short key is a unique prefix of the UUID digits after "2.25."
-    assert full_key[5:].startswith(short_key) or short_key == full_key
+    assert full_key.startswith("urn:uuid:")      # the ONDE v0.9.2 UUID form
+    # A short key is a unique leading piece of the UUID with its scheme prefix
+    # removed -- "urn:uuid:" since ONDE v0.9.2, "2.25." before it -- so rather
+    # than hardcoding either, check it appears in the full key.
+    assert short_key in full_key
     assert access.type_chain(dataset)
 
 

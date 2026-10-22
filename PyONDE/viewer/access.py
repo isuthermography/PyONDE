@@ -16,8 +16,9 @@ Behaviors this module papers over (each has a test in tests/test_viewer_access.p
     :func:`field` tries both spellings.
   * ``ONDEReferenceArray`` exposes no usable ``.shape`` through the proxy layer;
     its length lives at ``.refs._shape[0]``.  See :func:`ref_len`.
-  * ``ONDE:TYPE`` is the full inheritance chain, and may arrive as a 1-D or 2-D
-    array of ``str`` or ``bytes``.  See :func:`type_chain`.
+  * ``ONDE:TYPE`` is the full inheritance chain, and arrives as a 1-D or 2-D
+    array.  PyONDE decodes HDF5 fixed-length strings, but :func:`type_chain`
+    decodes as well, so the viewer does not depend on that.
   * Arrays are frozen read-only (``value.flags.writeable = False``); anything that
     intends to modify data must copy first.
 
@@ -25,6 +26,8 @@ Nothing here imports matplotlib: this module must stay usable on a plain
 ``pip install PyONDE`` with no viewer extra.
 """
 
+import os
+import re
 import warnings
 
 import numpy as np
@@ -33,7 +36,39 @@ from ..onde import ONDEArray, ONDEObject, ONDEValue
 
 __all__ = ["underlying", "unwrap", "field", "field_value", "has_field",
            "ref_len", "ref_list", "type_chain", "is_a", "leaf_type",
-           "field_names", "dataset_entries", "open_onde_file"]
+           "field_names", "dataset_entries", "open_onde_file",
+           "available_onde_versions", "DEFAULT_ONDE_VERSION"]
+
+#: Class definitions the viewer reads with unless told otherwise.
+#:
+#: Deliberately a fixed version rather than "whichever is newest installed":
+#: which definitions are in force decides how field names resolve, so it should
+#: be a decision, not a side effect of the PyONDE release someone happens to
+#: have.  Bump it when the viewer has been checked against a newer set; pass
+#: --onde-version (or onde_version=) to read with a different one.
+DEFAULT_ONDE_VERSION = "0.9.2"
+
+_VERSION_FILE = re.compile(r"^ONDE_fields_v(.+)\.csv$")
+
+
+def available_onde_versions():
+    """Every spec version PyONDE ships class definitions for.
+
+    Used to say something useful when the requested definitions are missing,
+    and by the tests that read a file under each version in turn.  It is
+    deliberately *not* used to pick the default -- see DEFAULT_ONDE_VERSION.
+    """
+    from .. import onde_versions_path
+    versions = []
+    try:
+        names = os.listdir(onde_versions_path)
+    except OSError:
+        return []
+    for name in names:
+        match = _VERSION_FILE.match(name)
+        if match:
+            versions.append(match.group(1))
+    return sorted(versions)
 
 
 def underlying(obj):
@@ -241,13 +276,22 @@ def dataset_entries(onde_file):
     return entries
 
 
-def open_onde_file(path, onde_version="0.9.1pre", mode="r"):
+def open_onde_file(path, onde_version=None, mode="r"):
     """Open an ONDE file for reading.
 
     *onde_version* selects which class definitions PyONDE compiles in, not what
     the file is required to contain: a file written under a different version
     still loads, with unknown fields reachable through :func:`field` by their
-    fully qualified names.
+    fully qualified names.  None means :data:`DEFAULT_ONDE_VERSION`.
     """
     from ..onde import ONDEDatasetFile
+    if onde_version is None:
+        onde_version = DEFAULT_ONDE_VERSION
+    available = available_onde_versions()
+    if available and onde_version not in available:
+        # Otherwise this surfaces as a FileNotFoundError naming a CSV inside
+        # PyONDE, which reads as if the data file were missing.
+        raise ValueError(
+            f"no ONDE class definitions for {onde_version!r} in this PyONDE "
+            f"(it ships: {', '.join(available)})")
     return ONDEDatasetFile.new(str(path), mode, onde_version=onde_version)

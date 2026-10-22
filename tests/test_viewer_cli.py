@@ -44,6 +44,24 @@ def test_info_on_an_unknown_key_reports_the_known_ones(onde_files, capsys):
     assert "known keys" in capsys.readouterr().err
 
 
+def test_a_closed_pipe_is_not_a_traceback(onde_files):
+    """`ondeview --list file | head` must stop quietly."""
+    import subprocess
+    import sys
+    listing = subprocess.Popen(
+        [sys.executable, "-m", "PyONDE.bin.ondeview", "--list",
+         onde_files["ascan"]],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    head = subprocess.Popen(["head", "-1"], stdin=listing.stdout,
+                            stdout=subprocess.PIPE)
+    listing.stdout.close()
+    head.communicate()
+    errors = listing.stderr.read().decode()
+    listing.wait()
+    assert "BrokenPipeError" not in errors, errors
+    assert "Traceback" not in errors, errors
+
+
 def test_missing_file_is_reported_not_raised(tmp_path, capsys):
     assert ondeview.main(["--list", str(tmp_path / "absent.onde")]) == 2
     assert "no such file" in capsys.readouterr().err

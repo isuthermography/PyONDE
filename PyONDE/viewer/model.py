@@ -411,13 +411,18 @@ class OndeDocument(object):
         self._load_datasets()
 
     @classmethod
-    def open(cls, path, onde_version="0.9.1pre"):
+    def open(cls, path, onde_version=None):
         """Open *path* read-only.
+
+        *onde_version* defaults to
+        :data:`PyONDE.viewer.access.DEFAULT_ONDE_VERSION`.
 
         PyONDE reads the whole file into memory at open time, so this call costs
         roughly the file size in RAM; see the viewer's size warning in
         PyONDE.bin.ondeview.
         """
+        if onde_version is None:
+            onde_version = access.DEFAULT_ONDE_VERSION
         onde_file = access.open_onde_file(path, onde_version=onde_version)
         return cls(onde_file, path, onde_version)
 

@@ -2,36 +2,34 @@
 
 The model layer (:mod:`PyONDE.viewer.access`, :mod:`PyONDE.viewer.model`,
 :mod:`PyONDE.viewer.state`) is pure Python and numpy and is always importable.
-The interactive viewer additionally needs matplotlib, which ships as an optional
-extra::
+The interactive viewer additionally needs matplotlib, which PyONDE does not
+declare as a dependency at all -- not required, and not an extra::
 
-    pip install PyONDE[viewer]
+    pip install matplotlib
 
 so nothing here imports matplotlib at module scope.  :func:`view_onde_file`
-imports it lazily and raises a readable error when the extra is absent.
+imports it lazily and raises a readable error when it is absent;
+:func:`~PyONDE.viewer.dependency.report_missing_matplotlib`, which ``ondeview``
+uses, additionally puts that error in a message box for anyone who started the
+viewer without a terminal to read it in.
 """
 
+from .dependency import (MATPLOTLIB_MESSAGE, report_missing_matplotlib,
+                         require_matplotlib)
 from .model import AxisDescriptor, OndeDatasetModel, OndeDocument
 from .state import ViewState, default_state_for
 
 __all__ = ["AxisDescriptor", "OndeDatasetModel", "OndeDocument",
            "ViewState", "default_state_for", "view_onde_file", "view_document",
-           "require_matplotlib"]
+           "require_matplotlib", "report_missing_matplotlib",
+           "MATPLOTLIB_MESSAGE"]
 
 
-def require_matplotlib():
-    """Import and return matplotlib.pyplot, or raise a useful ImportError."""
-    try:
-        import matplotlib.pyplot as pyplot
-    except ImportError as err:
-        raise ImportError(
-            "the ONDE viewer needs matplotlib, which is an optional dependency "
-            "of PyONDE. Install it with:  pip install PyONDE[viewer]") from err
-    return pyplot
-
-
-def view_onde_file(path, onde_version="0.9.1pre", dataset=None, show=True):
+def view_onde_file(path, onde_version=None, dataset=None, show=True):
     """Open *path* in the interactive viewer; returns the application object.
+
+    *onde_version* defaults to
+    :data:`PyONDE.viewer.access.DEFAULT_ONDE_VERSION`.
 
     With *show* true this blocks until the window is closed, under an
     interactive backend.  From IPython or a notebook, pass ``show=False`` and

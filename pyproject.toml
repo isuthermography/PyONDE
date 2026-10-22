@@ -8,11 +8,12 @@ classifiers = [
 	    "Development Status :: 3 - Alpha"
 	    ]
 
-[project.optional-dependencies]
-# The viewer's model layer needs nothing beyond PyONDE's own dependencies;
-# only the interactive front end needs matplotlib, so it ships as an extra:
-#   pip install PyONDE[viewer]
-viewer = ["matplotlib >= 3.7"]
+# matplotlib is deliberately absent from this file.  The interactive viewer
+# needs it, but PyONDE's own job is file access, and neither the library nor
+# "ondeview --list" / "ondeview --info" needs a plotting library to do it.
+# It is not a requirement and not an extra; "ondeview" tells the user to
+# install it -- on stderr and in a message box -- if they open the viewer
+# without it.  See PyONDE/viewer/dependency.py.
 
 [project.scripts]
 ondeview = "PyONDE.bin.ondeview:main"

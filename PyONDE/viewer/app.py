@@ -100,9 +100,8 @@ class OndeViewerApp(object):
         """[(short_key, display text)] for the dataset selector.
 
         The label leads and the key only disambiguates, because keys are not
-        always short: PyONDE's shortkeys() returns the full UUID for any key
-        that needs its maximum length, and a column of identical
-        "2.25.90000000000..." prefixes identifies nothing.
+        always short: a UUID with no unique prefix is returned at full length,
+        and a column of near-identical UUIDs identifies nothing.
         """
         texts = [model.label[:22] for model in self.document.datasets]
         duplicated = {text for text in texts if texts.count(text) > 1}

@@ -10,25 +10,29 @@ files disappoint it:
     dataset it references, the latter deliberately carrying no DATA (which the
     spec explicitly permits).
   * :func:`write_cscan_file` -- ``[N_U, N_V, N_A]`` scalar data on a grid.
+  * :func:`write_legacy_file` -- the same shape as an A-scan file but written
+    the way a pre-0.9.2 system would: SENSOR_LIST, FRAME, and a ``2.25.`` UUID.
   * :func:`write_hostile_file` -- written with raw h5py rather than PyONDE, so
     its structure is not shaped by PyONDE's own assumptions.  Every case in it
     is drawn from the specification's optional/alternative wordings.
 
-Two limits of PyONDE's loader that these files cannot exercise, because they
-make a file unreadable rather than awkward, and which the viewer can therefore
-only report rather than survive:
+One limit of PyONDE's loader that these files cannot exercise, because it makes
+a file unreadable rather than awkward, and which the viewer can therefore only
+report rather than survive: a dataset group with no ``ONDE:UUID`` raises during
+load, taking the whole file with it.
 
-  * a dataset group with no ``ONDE:UUID`` raises during load, taking the whole
-    file with it;
-  * ``ONDE:TYPE`` stored as fixed-length bytes is not discovered at all, since
-    the loader compares ``attrs["ONDE:TYPE"][0]`` against the str
-    ``"ONDE_DATASET"``.  (:func:`PyONDE.viewer.access.type_chain` decodes bytes
-    anyway, in case a future loader finds such groups.)
+Two further cases live in files of their own.  :func:`write_nested_file` (a
+sub-group inside a dataset group) cannot be loaded at all while hierarchical
+support waits on a specification update, and one such group would otherwise
+take a whole corpus down with it.  :func:`write_bytestype_file` (``ONDE:TYPE``
+stored as fixed-length bytes) is kept separate for the same reason -- PyONDE
+reads it now, but its treatment has changed twice, and the failure mode when it
+does not is the loss of every dataset in the file.
 """
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import h5py
 import numpy as np
@@ -40,18 +44,39 @@ from ..onde import (ONDEArray,
                     ONDEReferenceArray)
 
 __all__ = ["write_ascan_file", "write_tscan_file", "write_cscan_file",
-           "write_hostile_file", "write_nested_file", "write_all"]
+           "write_hostile_file", "write_nested_file", "write_bytestype_file",
+           "write_legacy_file", "write_all"]
 
-ONDE_VERSION = "0.9.1pre"
+#: The definitions the corpus is written with: what current PyONDE writes.
+ONDE_VERSION = "0.9.2"
+
+#: One file is written with these instead, to keep a pre-0.9.2 acquisition in
+#: the corpus -- SENSOR_LIST rather than PROBE_LIST, and a DICOM-style UUID.
+LEGACY_ONDE_VERSION = "0.9.1pre"
+
+#: The UUID form every file written before ONDE v0.9.2 carries.  v0.9.2 moved
+#: to "urn:uuid:" + a hyphenated hexadecimal 128-bit value; readers are told to
+#: treat the string as opaque, which is what the viewer does.
+LEGACY_UUID_PREFIX = "2.25."
 
 
-def _uuid(suffix):
+def _stamp():
+    """One timestamp per file: the UUID hashes it and DATE_AND_TIME records it.
+
+    PyONDE 154afec made generate_onde_uuid hash the ISO 8601 rendering, so the
+    two now have to come from the same aware datetime to stay consistent.
+    """
+    return datetime.now().astimezone()
+
+
+def _uuid(stamp, suffix):
     return generate_onde_uuid("PyONDE-viewer-test", str(uuid.getnode()),
-                              datetime.now(), suffix)
+                              stamp, suffix)
 
 
-def _timestamp():
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def _timestamp(stamp):
+    """ISO 8601 with microseconds and an offset, as the specification asks."""
+    return stamp.isoformat(timespec="microseconds")
 
 
 def _dimension(onde_file, coordinate, units, scale=1.0, offset=0.0):
@@ -71,8 +96,12 @@ def _index_dimensions(onde_file, specs):
     return references
 
 
-def _minimal_setup(onde_file, sample_rate=None):
-    """A structurally valid ONDE_SETUP_UT with one probe and one trajectory."""
+def _minimal_setup(onde_file, sample_rate=None, legacy=False):
+    """A structurally valid ONDE_SETUP_UT with one probe and one trajectory.
+
+    *legacy* writes the pre-0.9.2 spelling: SENSOR_LIST rather than PROBE_LIST,
+    and FRAME rather than INDEX_POINT_FRAME.
+    """
     setup = ONDEObject.new(onde_file, "ONDE_SETUP_UT")
     setup.GEOMETRIC_SETUP = ONDEObject.new(onde_file, "ONDE_GEOMETRIC_SETUP")
 
@@ -80,11 +109,18 @@ def _minimal_setup(onde_file, sample_rate=None):
     setup.GEOMETRIC_SETUP.COMPONENT.VELOCITIES = ONDEArray.new(
         value=np.array([5900.0, 3200.0]))
 
-    setup.GEOMETRIC_SETUP.SENSOR_LIST = ONDEReferenceArray.new(onde_file, shape=(1,))
     probe = ONDEObject.new(onde_file, "ONDE_UT_PROBE")
     probe.FREQUENCY = 5e6
-    probe.FRAME = ONDEArray.new(value=np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
-    setup.GEOMETRIC_SETUP.SENSOR_LIST[0] = probe
+    frame = ONDEArray.new(value=np.array(((0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),)))
+    probes = ONDEReferenceArray.new(onde_file, shape=(1,))
+    if legacy:
+        probe.FRAME = frame
+        probes[0] = probe
+        setup.GEOMETRIC_SETUP.SENSOR_LIST = probes
+    else:
+        probe.INDEX_POINT_FRAME = frame
+        probes[0] = probe
+        setup.GEOMETRIC_SETUP.PROBE_LIST = probes
 
     setup.GEOMETRIC_SETUP.ACQUISITION_TRAJECTORY = ONDEReferenceArray.new(
         onde_file, shape=(1,))
@@ -134,11 +170,12 @@ def write_ascan_file(path, shape=(3, 4, 2, 1000)):
     du, dv = 1e-3, 2e-3
 
     onde_file = ONDEDatasetFile.new(str(path), "w", onde_version=ONDE_VERSION)
+    stamp = _stamp()
     dataset = ONDEObject.new(onde_file, "ONDE_DATASET_UT_ASCAN")
-    dataset.UUID = _uuid("ascan")
+    dataset.UUID = _uuid(stamp, "ascan")
     dataset.LABEL = "Synthetic A-scan raster"
     dataset.OPERATOR = "PyONDE viewer test data"
-    dataset.DATE_AND_TIME = _timestamp()
+    dataset.DATE_AND_TIME = _timestamp(stamp)
     dataset.DATA = ONDEArray.new(
         value=_synthetic_ascans(n_u, n_v, n_ascan, n_time, dt, t0))
     dataset.INDEX_DIMENSIONS = _index_dimensions(onde_file, [
@@ -159,14 +196,15 @@ def write_tscan_file(path, shape=(2, 1, 64, 80)):
     """A T-scan zone plus the (data-free) A-scan dataset it was reconstructed from."""
     n_u, n_v, n_row, n_col = shape
     onde_file = ONDEDatasetFile.new(str(path), "w", onde_version=ONDE_VERSION)
+    stamp = _stamp()
 
     # The spec permits an A-scan dataset with no DATA when only the
     # reconstruction was kept.  SOURCE_ASCAN_DATASET is mandatory, so the
     # T-scan needs it to exist regardless.
     source = ONDEObject.new(onde_file, "ONDE_DATASET_UT_ASCAN")
-    source.UUID = _uuid("tscan-source")
+    source.UUID = _uuid(stamp, "tscan-source")
     source.LABEL = "Elementary channels (not recorded)"
-    source.DATE_AND_TIME = _timestamp()
+    source.DATE_AND_TIME = _timestamp(stamp)
     source.SETUP = _minimal_setup(onde_file, sample_rate=1e8)
 
     row = np.linspace(-1.0, 1.0, n_row)[:, None]
@@ -178,9 +216,9 @@ def write_tscan_file(path, shape=(2, 1, 64, 80)):
         data[iu, :, :, :] = image * (1.0 - 0.3 * iu)
 
     dataset = ONDEObject.new(onde_file, "ONDE_DATASET_UT_TSCAN")
-    dataset.UUID = _uuid("tscan")
+    dataset.UUID = _uuid(stamp, "tscan")
     dataset.LABEL = "Synthetic TFM zone"
-    dataset.DATE_AND_TIME = _timestamp()
+    dataset.DATE_AND_TIME = _timestamp(stamp)
     dataset.DATA = ONDEArray.new(value=data)
     dataset.INDEX_DIMENSIONS = _index_dimensions(onde_file, [
         ("U Position", "meters", 5e-3, 0.0),
@@ -189,11 +227,20 @@ def write_tscan_file(path, shape=(2, 1, 64, 80)):
         ("X Position", "meters", 0.25e-3, -10e-3)])
     dataset.AMPLITUDE_DIMENSION = _dimension(onde_file, "Amplitude", "arbitrary")
     dataset.SETUP = _minimal_setup(onde_file, sample_rate=1e8)
-    dataset.ZONE_FRAME = ONDEArray.new(
+    # v0.9.2 moved ZONE_* and RECONSTRUCTION_MODE out of the T-scan dataset
+    # into their own ONDE_UT_RECONSTRUCTION_SETUP, referenced from it.
+    reconstruction = ONDEObject.new(onde_file, "ONDE_UT_RECONSTRUCTION_SETUP")
+    reconstruction.ZONE_FRAME = ONDEArray.new(
         value=np.array((0.0, 0.0, 8e-3, 1.0, 0.0, 0.0, 0.0)))
-    dataset.ZONE_DIMENSION = ONDEArray.new(value=np.array((20e-3, 16e-3, 0.0)))
-    dataset.ZONE_SIZE = ONDEArray.new(value=np.array((n_col, n_row, 1)))
-    dataset.RECONSTRUCTION_MODE = "TFM"
+    reconstruction.ZONE_DIMENSION = ONDEArray.new(
+        value=np.array((20e-3, 16e-3, 0.0)))
+    reconstruction.ZONE_SIZE = ONDEArray.new(value=np.array((n_col, n_row, 1)))
+    reconstruction.RECONSTRUCTION_MODE = "TFM"
+    # A scalar integer field.  HDF5 gives it back as numpy int64, which PyONDE
+    # did not recognize until a6be485; the corpus carries one so the suite
+    # notices if that regresses.
+    reconstruction.REFERENCE_PROBE_INDEX = 0
+    dataset.RECONSTRUCTION_SETUP = reconstruction
     dataset.SOURCE_ASCAN_DATASET = source
 
     onde_file.graph.add(source)
@@ -207,6 +254,7 @@ def write_cscan_file(path, shape=(5, 6, 1)):
     """A C-scan of scalar values on an acquisition grid."""
     n_u, n_v, n_a = shape
     onde_file = ONDEDatasetFile.new(str(path), "w", onde_version=ONDE_VERSION)
+    stamp = _stamp()
 
     u_positions = np.arange(n_u) * 2e-3
     v_positions = np.arange(n_v) * 2e-3
@@ -222,9 +270,9 @@ def write_cscan_file(path, shape=(5, 6, 1)):
     grid.V_GRID_DATA = ONDEArray.new(value=v_positions)
 
     dataset = ONDEObject.new(onde_file, "ONDE_DATASET_UT_CSCAN")
-    dataset.UUID = _uuid("cscan")
+    dataset.UUID = _uuid(stamp, "cscan")
     dataset.LABEL = "Synthetic thickness C-scan"
-    dataset.DATE_AND_TIME = _timestamp()
+    dataset.DATE_AND_TIME = _timestamp(stamp)
     dataset.DATA = ONDEArray.new(value=data)
     dataset.INDEX_DIMENSIONS = _index_dimensions(onde_file, [
         ("U Position", "meters", 2e-3, 0.0),
@@ -276,7 +324,7 @@ def write_hostile_file(path):
       ``degenerate`` DATA whose non-time axes are all length 1.
     """
     with h5py.File(str(path), "w") as handle:
-        handle.attrs["ONDE:VERSION"] = "0.9.1"
+        handle.attrs["ONDE:VERSION"] = "0.9.2"
         handle.attrs["ONDE:FILETYPE"] = ["ONDE_UT"]
 
         storage = handle.create_group("storage")
@@ -289,7 +337,7 @@ def write_hostile_file(path):
         # -- bare: integer data, no dimension metadata whatsoever ----------
         bare = handle.create_group("bare_ascan")
         bare.attrs["ONDE:TYPE"] = _ASCAN_TYPE
-        bare.attrs["ONDE:UUID"] = "2.25.900000000000000000000000000000000001"
+        bare.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999991"
         bare.attrs["ONDE:LABEL"] = "Integer A-scans, no dimensions"
         counts = (np.arange(2 * 1 * 1 * 64).reshape(2, 1, 1, 64) % 256) - 128
         bare.create_dataset("ONDE_DATASET:DATA", data=counts.astype(np.int16))
@@ -297,7 +345,7 @@ def write_hostile_file(path):
         # -- mismatch: rank 2 data, four dimensions listed -----------------
         mismatch = handle.create_group("mismatched_dims")
         mismatch.attrs["ONDE:TYPE"] = _CSCAN_TYPE
-        mismatch.attrs["ONDE:UUID"] = "2.25.900000000000000000000000000000000002"
+        mismatch.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999992"
         mismatch.attrs["ONDE:LABEL"] = "Rank/dimension mismatch"
         mismatch.create_dataset("ONDE_DATASET:DATA",
                                 data=np.linspace(0, 1, 5 * 7).reshape(5, 7))
@@ -315,7 +363,7 @@ def write_hostile_file(path):
             "blob", data=np.sin(np.linspace(0, 20, 3 * 128)).reshape(3, 128))
         byref = scratch.create_group("referenced_data")
         byref.attrs["ONDE:TYPE"] = _ASCAN_TYPE
-        byref.attrs["ONDE:UUID"] = "2.25.900000000000000000000000000000000003"
+        byref.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999993"
         byref.attrs["ONDE:LABEL"] = "DATA by HDF5 reference"
         byref.attrs["ONDE_DATASET:DATA"] = blob.ref
         byref.attrs["ONDE_DATASET:INDEX_DIMENSIONS"] = np.array([
@@ -326,13 +374,13 @@ def write_hostile_file(path):
         # -- nodata: entry point with no DATA ------------------------------
         nodata = handle.create_group("no_data_ascan")
         nodata.attrs["ONDE:TYPE"] = _ASCAN_TYPE
-        nodata.attrs["ONDE:UUID"] = "2.25.900000000000000000000000000000000004"
+        nodata.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999994"
         nodata.attrs["ONDE:LABEL"] = "Elementary channels not recorded"
 
         # -- degenerate: everything length 1 except time -------------------
         degenerate = handle.create_group("degenerate")
         degenerate.attrs["ONDE:TYPE"] = _ASCAN_TYPE
-        degenerate.attrs["ONDE:UUID"] = "2.25.900000000000000000000000000000000005"
+        degenerate.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999995"
         degenerate.attrs["ONDE:LABEL"] = "Single A-scan in a 4-D wrapper"
         degenerate.create_dataset(
             "ONDE_DATASET:DATA",
@@ -343,6 +391,33 @@ def write_hostile_file(path):
             _h5_dimension(dims, "deg_a", "None", "unitless", 1.0, 0.0).ref,
             _h5_dimension(dims, "deg_t", "Time", "seconds", 4e-9, 3e-6).ref,
         ], dtype=h5py.ref_dtype)
+    return str(path)
+
+
+def write_bytestype_file(path):
+    """A dataset whose ONDE:TYPE is fixed-length bytes rather than str.
+
+    h5py stores a numpy "S" array as fixed-length ASCII, which reads back as
+    bytes; a writer in C or FORTRAN naturally produces exactly that.  The
+    specification says H5T_STRING and does not require a particular width.
+
+    PyONDE decodes these to str at load as of 39214f6, so the dataset reads
+    like any other.  It lives in a file of its own because the behavior has
+    changed twice and the failure mode is not contained: before 50e8c49 the
+    group was invisible, and between 50e8c49 and 39214f6 it was discovered and
+    then rejected, which aborted the load of every dataset in the file.
+    """
+    with h5py.File(str(path), "w") as handle:
+        handle.attrs["ONDE:VERSION"] = "0.9.2"
+        handle.attrs["ONDE:FILETYPE"] = ["ONDE_UT"]
+        dataset = handle.create_group("bytes_typed")
+        dataset.attrs["ONDE:TYPE"] = np.array(
+            [entry.encode("ascii") for entry in _ASCAN_TYPE], dtype="S32")
+        dataset.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999997"
+        dataset.attrs["ONDE:LABEL"] = "Bytes-typed ONDE:TYPE"
+        dataset.create_dataset(
+            "ONDE_DATASET:DATA",
+            data=np.sin(np.linspace(0, 12, 32)).reshape(1, 32))
     return str(path)
 
 
@@ -361,11 +436,11 @@ def write_nested_file(path):
     guarding this will start failing and can be turned into a positive one.
     """
     with h5py.File(str(path), "w") as handle:
-        handle.attrs["ONDE:VERSION"] = "0.9.1"
+        handle.attrs["ONDE:VERSION"] = "0.9.2"
         handle.attrs["ONDE:FILETYPE"] = ["ONDE_UT"]
         dataset = handle.create_group("nested_ascan")
         dataset.attrs["ONDE:TYPE"] = _ASCAN_TYPE
-        dataset.attrs["ONDE:UUID"] = "2.25.900000000000000000000000000000000006"
+        dataset.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999996"
         dataset.attrs["ONDE:LABEL"] = "Dimensions nested inside the dataset group"
         dataset.create_dataset("ONDE_DATASET:DATA",
                                data=np.zeros((1, 1, 1, 16)))
@@ -373,6 +448,48 @@ def write_nested_file(path):
         dimension = _h5_dimension(nested, "t", "Time", "seconds", 1e-8, 0.0)
         dataset.attrs["ONDE_DATASET:INDEX_DIMENSIONS"] = np.array(
             [dimension.ref], dtype=h5py.ref_dtype)
+    return str(path)
+
+
+def write_legacy_file(path):
+    """A file as a pre-0.9.2 acquisition system would have written it.
+
+    Two things changed with v0.9.2 that a reader has to take in its stride,
+    and this file still has the old form of both:
+
+      * ``SENSOR_LIST`` (now ``PROBE_LIST``) and ``FRAME`` (now
+        ``INDEX_POINT_FRAME``), so the current class definitions do not know
+        these field names and they are reachable only by their fully
+        qualified spelling;
+      * a DICOM-style ``2.25.<decimal>`` UUID rather than ``urn:uuid:<hex>``.
+        The specification tells readers to treat the string as opaque; PyONDE
+        shortens only the ``urn:uuid:`` form, so this key comes back at full
+        length and the viewer addresses the dataset by it unchanged.
+    """
+    n_time = 500
+    dt, t0 = 2e-8, 5e-6
+    onde_file = ONDEDatasetFile.new(str(path), "w",
+                                    onde_version=LEGACY_ONDE_VERSION)
+    stamp = _stamp()
+    dataset = ONDEObject.new(onde_file, "ONDE_DATASET_UT_ASCAN")
+    # The 2.25. form: "2.25." followed by the decimal 128-bit value.
+    dataset.UUID = LEGACY_UUID_PREFIX + "124217692408202938307279138509891347358"
+    dataset.LABEL = "Legacy 0.9.1pre acquisition"
+    dataset.DATE_AND_TIME = _timestamp(stamp)
+    dataset.DATA = ONDEArray.new(
+        value=np.cos(2 * np.pi * 2e6 * (t0 + np.arange(n_time) * dt)
+                     ).reshape(1, 1, 1, n_time))
+    dataset.INDEX_DIMENSIONS = _index_dimensions(onde_file, [
+        ("U Position", "meters", 1e-3, 0.0),
+        ("V Position", "meters", 1e-3, 0.0),
+        ("Ascan", "unitless", 1.0, 0.0),
+        ("Time", "seconds", dt, t0)])
+    dataset.AMPLITUDE_DIMENSION = _dimension(onde_file, "Voltage", "Volts")
+    dataset.SETUP = _minimal_setup(onde_file, sample_rate=1.0 / dt, legacy=True)
+
+    onde_file.graph.add(dataset)
+    onde_file.flush()
+    onde_file.close()
     return str(path)
 
 
@@ -386,4 +503,7 @@ def write_all(directory):
         "cscan": write_cscan_file(os.path.join(directory, "cscan.onde")),
         "hostile": write_hostile_file(os.path.join(directory, "hostile.onde")),
         "nested": write_nested_file(os.path.join(directory, "nested.onde")),
+        "bytestype": write_bytestype_file(
+            os.path.join(directory, "bytestype.onde")),
+        "legacy": write_legacy_file(os.path.join(directory, "legacy.onde")),
     }

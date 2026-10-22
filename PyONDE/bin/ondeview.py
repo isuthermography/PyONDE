@@ -5,7 +5,9 @@
 ``ondeview --info KEY FILE`` axes, calibration and metadata for one dataset
 
 The listing paths need only numpy and h5py, so they work on a plain
-``pip install PyONDE`` without the ``viewer`` extra.
+``pip install PyONDE``.  The viewer additionally needs matplotlib, which
+PyONDE does not declare as a dependency; ``ondeview FILE`` says so, in a
+message box as well as on stderr, when it is not installed.
 """
 
 import argparse
@@ -109,11 +111,16 @@ NON_INTERACTIVE_BACKENDS = frozenset(
 
 
 def command_view(document, key, stream):
-    from ..viewer import require_matplotlib, view_document
+    from ..viewer import (report_missing_matplotlib, require_matplotlib,
+                          view_document)
     try:
         require_matplotlib()
-    except ImportError as err:
-        print(f"error: {err}", file=sys.stderr)
+    except ImportError:
+        # Not just a message on stderr: this is the one command that may have
+        # been started from a desktop launcher or a file association, with
+        # nowhere for the text to land.  report_missing_matplotlib also puts
+        # it in a box when the machine can draw one.
+        report_missing_matplotlib()
         return 3
 
     import matplotlib
@@ -148,10 +155,12 @@ def build_parser():
                         help="describe one dataset (axes, calibration, metadata)")
     parser.add_argument("-d", "--dataset", metavar="KEY",
                         help="dataset to show first in the viewer")
-    parser.add_argument("--onde-version", default="0.9.1pre",
-                        help="ONDE class definitions to read with "
-                             "(default: %(default)s). This selects which fields "
-                             "PyONDE knows about, not what the file must contain.")
+    from ..viewer.access import DEFAULT_ONDE_VERSION
+    parser.add_argument("--onde-version", default=DEFAULT_ONDE_VERSION,
+                        help="ONDE class definitions to read with (default: "
+                             "%(default)s). This selects which fields PyONDE "
+                             "knows about by their short names, not what the "
+                             "file must contain.")
     return parser
 
 
@@ -183,6 +192,14 @@ def main(argv=None):
         if arguments.list:
             return command_list(document, stream)
         return command_view(document, arguments.dataset, stream)
+    except BrokenPipeError:
+        # `ondeview --list big.onde | head` closes the pipe under us; a
+        # listing tool should stop quietly rather than print a traceback.
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        return 0
     finally:
         document.close()
 
