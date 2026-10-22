@@ -1920,7 +1920,7 @@ class ONDEObject(ONDEBase):
                 # Scalar HDF5 fixed-length string; decode as above.
                 h5_attr = h5_attr.decode("utf-8",errors="replace")
                 pass
-            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_):
+            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_) or isinstance(h5_attr,np.complex64) or isinstance(h5_attr,np.complex128):
                 attr_obj = ONDEValue.new(h5_attr)
                 _ONDE_attrs[attrname] = attr_obj
                 pass
