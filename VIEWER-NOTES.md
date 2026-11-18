@@ -1,7 +1,7 @@
 # ONDE viewer — Phases 0–4, toolbar integration, ONDE v0.9.2
 
-This folder is a complete PyONDE working tree: upstream PyONDE at `66caad2`
-("Better robustness in handling numpy types") with the viewer applied on
+This folder is a complete PyONDE working tree: upstream PyONDE at `ee5e6b5`
+(v0.1.7, "update API to expect a filetype parameter") with the viewer applied on
 top, reading ONDE v0.9.2.
 The screenshots show a B-scan, a T-scan zone, the export row and the metadata
 window.
@@ -10,7 +10,7 @@ window.
 
 ```sh
 cd /home/sdh4/code/PyONDE-viewer
-PYTHONPATH=. python -m pytest tests/test_viewer_*.py              # 197 tests
+PYTHONPATH=. python -m pytest tests/test_viewer_*.py              # 221 tests
 PYTHONPATH=. python -c "from PyONDE.viewer import testdata; print(testdata.write_all('/tmp/onde'))"
 PYTHONPATH=. python -m PyONDE.bin.ondeview --list /tmp/onde/ascan.onde
 PYTHONPATH=. python -m PyONDE.bin.ondeview /tmp/onde/ascan.onde   # the viewer
@@ -68,7 +68,7 @@ scroll wheel step the active axis, and clicking reads out the value.
 | `PyONDE/viewer/inspector.py` | The metadata window: scrollable, filterable text |
 | `PyONDE/viewer/testdata.py` | Synthetic A/T/C-scan files + a hostile file built with raw h5py |
 | `PyONDE/bin/ondeview.py` | `ondeview` — viewer, `--list`, `--info` |
-| `tests/` | 197 tests, including a round-trip check against raw h5py |
+| `tests/` | 221 tests, including a round-trip check against raw h5py |
 | `doc/source/viewer.rst` | Sphinx page |
 
 ## Two bugs in the v0.9.2 PyONDE update — both now fixed upstream
@@ -97,30 +97,64 @@ nothing applied.
 ### Scalar attribute types, and the ones still outside the net
 
 `a6be485` added `np.integer`; `66caad2` added `np.float32`, `np.float64`,
-`bool` and `np.bool_`. Between them that covers every scalar type the corpus
-and any ordinary acquisition system produce, and each reads back as the plain
-Python equivalent:
+`bool` and `np.bool_`; `c8c959e` added the complex types. Between them that
+covers every scalar type the corpus and any ordinary acquisition system
+produce, and each reads back as the plain Python equivalent:
 
 | written as | read back |
 |---|---|
 | `np.int64`, `np.int32`, `np.uint8` | `int` |
 | `np.float32`, `np.float64` | `float` |
 | `np.bool_` | `bool` |
-| `np.float16`, `np.longdouble`, `np.complex128` | `ValueError: Unknown hdf5 attribute type` |
+| `np.complex64`, `np.complex128` | `complex` |
+| `np.float16`, `np.longdouble` | `ValueError: Unknown hdf5 attribute type` |
 
-The last row is the enumeration's remaining edge. None of them is plausible in
-an ONDE file today — h5py widens Python floats to float64, and a complex
-amplitude would be an array rather than a scalar attribute — so this is a note
-rather than a defect. If one ever does turn up, the whole file fails to load,
-not just that field, and the general form of the fix is to convert any
-`np.generic` with `.item()` at the boundary where fixed-length strings are
-decoded, instead of listing the types that pass.
+The last row is the enumeration's remaining edge, and it has been shrinking a
+release at a time. Neither type is plausible in an ONDE file today — h5py
+widens Python floats to float64 — so this is a note rather than a defect. If
+one ever does turn up, the whole file fails to load, not just that field, and
+the general form of the fix is to convert any `np.generic` with `.item()` at
+the boundary where fixed-length strings are decoded, instead of listing the
+types that pass.
 
-`test_narrow_scalar_attributes_behave_per_library_capability` probes the
-library rather than assuming it, so the suite reads correctly on both sides of
-that change: it asserts the value round-trips where the type is accepted, and
+`test_scalar_attribute_types_behave_per_library_capability` probes each type
+rather than assuming it, so the suite reads correctly on both sides of every
+such change: it asserts the value round-trips where the type is accepted, and
 that `ondeview` reports a readable error rather than a traceback where it is
-not.
+not. That is why `c8c959e` turned the complex row from a documented gap into
+coverage without a test needing to be rewritten.
+
+## ONDE:FILETYPE, and why the viewer asks for nothing
+
+PyONDE v0.1.7 (`ee5e6b5`) made `filetype` a real parameter of
+`ONDEDatasetFile.new`. Creating a file now **requires** it — there is no
+default left, and a writer that omits it gets `No filetype given when creating
+a new file` — while a reader may pass tags and gets a `ValueError` naming any
+the file does not carry.
+
+Every writer in `testdata.py` passes `testdata.FILETYPE`, which is
+`{"ONDE_DATASET", "ONDE_UT"}`, the pair PyONDE's own demos write. That was the
+only change the new release actually forced.
+
+It does set a floor: **writing** the synthetic corpus now needs PyONDE
+v0.1.7 or newer, since the argument does not exist before it. Reading does
+not — the viewer's own call is unchanged, and a file written by the new
+library was checked to open under `66caad2` as well.
+
+**On the reading side the viewer passes nothing, deliberately.** Whether a
+file is worth opening is decided by whether it holds a dataset the viewer can
+show, which the model layer already works out from the datasets themselves and
+reports per file. Demanding `ONDE_UT` at the door would lock the viewer out of
+a conforming file from another modality — exactly the generic-browser premise
+this was built on — and would buy nothing, since a UT-tagged file with no
+displayable DATA is still reported as such. `access.open_onde_file` takes an
+optional `filetype=` for callers who do want the check, and passes it through
+only when given, so the same call still works against a pre-v0.1.7 PyONDE.
+
+Three tests hold that line: the corpus carries the tags, a file whose tags are
+*not* the expected pair (the hostile file, tagged `ONDE_UT` alone) still opens,
+and the opt-in check both accepts a tag that is present and refuses one that
+is not.
 
 ## PyONDE behaviors the viewer lives with
 
@@ -263,6 +297,30 @@ guard, typing `finished.csv` stepped sliders (`f`, `i`) and flipped toggles.
 **Blitting: 62 ms → 4 ms per step (waveform), 87 ms → 21 ms (image)**, measured
 on a 20×20×4×4000 file. Turn it off with `OndeViewerApp(blit=False)` if it ever
 misbehaves on your backend.
+
+**Two parties cannot blit the same figure without agreeing who draws last.**
+matplotlib 3.7 gave `RadioButtons` and `CheckButtons` blitting of their own:
+the button artists are marked `animated`, which takes them out of every
+ordinary draw, and a `draw_event` handler belonging to the widget paints them
+back afterwards. The `BlitManager` connects its `draw_event` handler when the
+figure is built, so it runs *first* — and snapshotted the figure before any
+widget had repainted its buttons. The background held the labels and not the
+circles, so every blit restored a column of labels with nothing beside them.
+Dragging a slider blits, which is why the circles vanished mid-drag; moving
+the pointer over the plot brought them back, because the readout ends with a
+`draw_idle()` and a full draw lets each widget repaint itself.
+
+`controls._buttons` builds both widget types with `useblit=False`, which puts
+their artists back in the ordinary draw and therefore in the snapshot. Nothing
+is given up: these buttons change only on a click, which rebuilds the column
+and redraws in full regardless.
+
+Two tests guard it. One asserts no widget axes holds an animated artist the
+viewer does not own — the condition that caused this, which would return if a
+future matplotlib animates something new. The other drags a slider and
+compares the rendered pixels of the control column before and after, because
+while this was broken every artist was present and correct and only what
+reached the canvas was wrong.
 
 **Limits now come from the whole dataset, not the slice on screen.** This began
 as a prerequisite — per-slice limits change the axes on every step, which

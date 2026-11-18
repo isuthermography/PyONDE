@@ -202,3 +202,70 @@ def test_the_viewer_recovers_once_the_data_reads_again(ascan_app, monkeypatch):
     ascan_app.on_index_changed(0, 2)
     assert not ascan_app.plot.message.get_visible()
     assert ascan_app.plot.line.get_visible()
+
+
+# -- the control column survives a blit -----------------------------------
+
+def _region(canvas, axes, pad=4):
+    """The rendered pixels of one Axes, as an RGB array."""
+    bbox = axes.get_window_extent()
+    buffer = np.asarray(canvas.buffer_rgba())
+    height = buffer.shape[0]
+    x0 = max(int(bbox.x0) - pad, 0)
+    x1 = int(np.ceil(bbox.x1)) + pad
+    y0 = max(int(height - bbox.y1) - pad, 0)
+    y1 = int(np.ceil(height - bbox.y0)) + pad
+    return buffer[y0:y1, x0:x1, :3].copy()
+
+
+def test_no_widget_keeps_animated_artists_of_its_own(ascan_app):
+    """The condition that made the radio circles vanish while dragging.
+
+    matplotlib 3.7 gave RadioButtons and CheckButtons their own blitting: the
+    button artists are marked animated, which takes them out of every ordinary
+    draw, and a draw_event handler of the widget's own puts them back.  The
+    BlitManager's handler is connected first and so runs first, capturing the
+    figure before any of that happens -- so the circles were missing from the
+    background, and every blit wiped them until a full redraw brought them
+    back.  controls._buttons turns that off; this fails if it stops working,
+    or if some future widget starts animating artists the viewer does not know
+    about.
+    """
+    ours = {id(artist) for artist in ascan_app._registered_artists}
+    stray = []
+    for name, widget in ascan_app.controls.widgets.items():
+        axes = getattr(widget, "ax", None)
+        if axes is None:
+            continue
+        stray += [(name, type(child).__name__) for child in axes.get_children()
+                  if child.get_animated() and id(child) not in ours]
+    assert stray == []
+
+
+def test_the_radio_buttons_still_look_the_same_after_a_drag(ascan_app):
+    """The symptom itself, in pixels: drag a slider, compare the column.
+
+    Asserting on the rendered region rather than on artist state is the point
+    -- the artists were all present and correct while this was broken; what
+    was wrong was what reached the canvas.
+    """
+    canvas = ascan_app.figure.canvas
+    ascan_app.on_y_axis_chosen(0)                 # image view, as in the report
+    canvas.draw()
+
+    watched = [name for name in ("dataset", "x_axis", "y_axis", "cmap",
+                                 "toggles")
+               if name in ascan_app.controls.widgets]
+    assert watched, "expected a control column to look at"
+    before = {name: _region(canvas, ascan_app.controls.widgets[name].ax)
+              for name in watched}
+
+    slider = next(widget for name, widget in ascan_app.controls.widgets.items()
+                  if name.startswith("slider_"))
+    for value in (1, 2, 1, 0):
+        slider.set_val(value)
+
+    for name in watched:
+        after = _region(canvas, ascan_app.controls.widgets[name].ax)
+        changed = int((before[name] != after).any(axis=2).sum())
+        assert changed == 0, f"{name} lost {changed} pixels to a blit"

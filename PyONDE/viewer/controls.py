@@ -20,6 +20,8 @@ switching is rare) and avoids a class of stale-widget bug that comes from
 reconfiguring sliders in place.
 """
 
+import inspect
+
 from matplotlib.widgets import (Button, CheckButtons, RadioButtons, RangeSlider,
                                 Slider, TextBox)
 
@@ -146,7 +148,8 @@ class Controls(object):
                 return
             active = max(0, [key for key, _ in labels].index(state.dataset_key)
                          if state.dataset_key in [key for key, _ in labels] else 0)
-            radio = RadioButtons(axes, [text for _, text in labels], active=active)
+            radio = _buttons(RadioButtons, axes, [text for _, text in labels],
+                             active=active)
             _shrink(radio)
             radio.on_clicked(self._make_guarded(
                 lambda text: self.app.on_dataset_chosen(
@@ -175,8 +178,8 @@ class Controls(object):
         x_axes = self.column.add(min(0.03 + 0.022 * len(self._x_labels), 0.20),
                                  "x axis")
         if x_axes is not None:
-            radio = RadioButtons(x_axes, self._x_labels,
-                                 active=state.x_axis)
+            radio = _buttons(RadioButtons, x_axes, self._x_labels,
+                             active=state.x_axis)
             _shrink(radio)
             radio.on_clicked(self._make_guarded(
                 lambda text: self.app.on_x_axis_chosen(
@@ -188,7 +191,7 @@ class Controls(object):
                                  "y axis")
         if y_axes is not None:
             active = 0 if state.is_waveform else state.y_axis + 1
-            radio = RadioButtons(y_axes, self._y_labels, active=active)
+            radio = _buttons(RadioButtons, y_axes, self._y_labels, active=active)
             _shrink(radio)
             radio.on_clicked(self._make_guarded(self._on_y_axis))
             self.widgets["y_axis"] = radio
@@ -255,7 +258,7 @@ class Controls(object):
         axes = self.column.add(min(0.03 + 0.022 * len(COLORMAPS), 0.14), "colormap")
         if axes is not None:
             active = COLORMAPS.index(state.cmap) if state.cmap in COLORMAPS else 0
-            radio = RadioButtons(axes, list(COLORMAPS), active=active)
+            radio = _buttons(RadioButtons, axes, list(COLORMAPS), active=active)
             _shrink(radio)
             radio.on_clicked(self._make_guarded(self.app.on_cmap_chosen))
             self.widgets["cmap"] = radio
@@ -284,7 +287,7 @@ class Controls(object):
             actives = [state.clim is None, state.per_slice_limits,
                        state.aspect == "equal", state.invert_y,
                        state.full_resolution]
-            checks = CheckButtons(axes, labels, actives)
+            checks = _buttons(CheckButtons, axes, labels, actives)
             for text in checks.labels:
                 text.set_fontsize(8)
             checks.on_clicked(self._make_guarded(self.app.on_toggle))
@@ -387,6 +390,40 @@ class Controls(object):
 def _slider_title(axis, index):
     """"U Position [2] = 2 mm" -- everything the slider needs to say, above it."""
     return f"{axis.coordinate} [{index}] = {axis.format_value(index)}"
+
+
+#: matplotlib 3.7 gave the button widgets their own blitting, and the switch
+#: for it.  Before that they animated nothing and there is nothing to turn off.
+_BUTTONS_TAKE_USEBLIT = "useblit" in inspect.signature(RadioButtons).parameters
+
+
+def _buttons(factory, *args, **kwargs):
+    """Build a RadioButtons or CheckButtons with its own blitting turned off.
+
+    Since matplotlib 3.7 these widgets blit themselves: they mark their button
+    artists ``animated``, keep a private background, and repaint the buttons
+    from a ``draw_event`` handler of their own.  An animated artist is skipped
+    by every ordinary draw, so those circles exist on screen only because that
+    handler puts them back after each draw.
+
+    That collides with :class:`~PyONDE.viewer.blit.BlitManager`, which snapshots
+    the figure from a ``draw_event`` handler of *its* own -- connected first,
+    when the figure is built, so it runs first, before any widget has repainted
+    its buttons.  The snapshot therefore holds the labels but not the circles,
+    and every blit from then on restores a column of labels with no buttons
+    beside them.  Dragging a slider blits, so the circles disappear as soon as
+    one is dragged, and come back only when something forces a full redraw --
+    moving the pointer over the plot does, through the readout -- which is what
+    made this look like a repaint that simply went missing.
+
+    Turning the widgets' own blitting off puts their artists back into the
+    ordinary draw, and so into the snapshot, where the blit path wants them.
+    Nothing is lost by it: these buttons change only on a click, which rebuilds
+    the column and redraws in full anyway.
+    """
+    if _BUTTONS_TAKE_USEBLIT:
+        kwargs["useblit"] = False
+    return factory(*args, **kwargs)
 
 
 def _shrink(radio):

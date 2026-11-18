@@ -50,6 +50,13 @@ __all__ = ["write_ascan_file", "write_tscan_file", "write_cscan_file",
 #: The definitions the corpus is written with: what current PyONDE writes.
 ONDE_VERSION = "0.9.2"
 
+#: ONDE:FILETYPE tags for the files written here.  PyONDE v0.1.7 made this
+#: argument mandatory when creating a file -- there is no longer a default --
+#: so every writer below passes it.  A reader may pass tags too, and gets an
+#: exception if the file lacks one; the viewer deliberately does not, since a
+#: conforming file that is not an ONDE_UT file must still open.
+FILETYPE = {"ONDE_DATASET", "ONDE_UT"}
+
 #: One file is written with these instead, to keep a pre-0.9.2 acquisition in
 #: the corpus -- SENSOR_LIST rather than PROBE_LIST, and a DICOM-style UUID.
 LEGACY_ONDE_VERSION = "0.9.1pre"
@@ -169,7 +176,8 @@ def write_ascan_file(path, shape=(3, 4, 2, 1000)):
     dt, t0 = 1e-8, 1e-5
     du, dv = 1e-3, 2e-3
 
-    onde_file = ONDEDatasetFile.new(str(path), "w", onde_version=ONDE_VERSION)
+    onde_file = ONDEDatasetFile.new(str(path), "w", filetype=FILETYPE,
+                                    onde_version=ONDE_VERSION)
     stamp = _stamp()
     dataset = ONDEObject.new(onde_file, "ONDE_DATASET_UT_ASCAN")
     dataset.UUID = _uuid(stamp, "ascan")
@@ -195,7 +203,8 @@ def write_ascan_file(path, shape=(3, 4, 2, 1000)):
 def write_tscan_file(path, shape=(2, 1, 64, 80)):
     """A T-scan zone plus the (data-free) A-scan dataset it was reconstructed from."""
     n_u, n_v, n_row, n_col = shape
-    onde_file = ONDEDatasetFile.new(str(path), "w", onde_version=ONDE_VERSION)
+    onde_file = ONDEDatasetFile.new(str(path), "w", filetype=FILETYPE,
+                                    onde_version=ONDE_VERSION)
     stamp = _stamp()
 
     # The spec permits an A-scan dataset with no DATA when only the
@@ -253,7 +262,8 @@ def write_tscan_file(path, shape=(2, 1, 64, 80)):
 def write_cscan_file(path, shape=(5, 6, 1)):
     """A C-scan of scalar values on an acquisition grid."""
     n_u, n_v, n_a = shape
-    onde_file = ONDEDatasetFile.new(str(path), "w", onde_version=ONDE_VERSION)
+    onde_file = ONDEDatasetFile.new(str(path), "w", filetype=FILETYPE,
+                                    onde_version=ONDE_VERSION)
     stamp = _stamp()
 
     u_positions = np.arange(n_u) * 2e-3
@@ -325,6 +335,9 @@ def write_hostile_file(path):
     """
     with h5py.File(str(path), "w") as handle:
         handle.attrs["ONDE:VERSION"] = "0.9.2"
+        # Deliberately not the tags PyONDE writes (it would write both
+        # ONDE_DATASET and ONDE_UT): the viewer asks for no tags when it
+        # opens a file, so an unexpected set must not keep it out.
         handle.attrs["ONDE:FILETYPE"] = ["ONDE_UT"]
 
         storage = handle.create_group("storage")
@@ -409,7 +422,7 @@ def write_bytestype_file(path):
     """
     with h5py.File(str(path), "w") as handle:
         handle.attrs["ONDE:VERSION"] = "0.9.2"
-        handle.attrs["ONDE:FILETYPE"] = ["ONDE_UT"]
+        handle.attrs["ONDE:FILETYPE"] = sorted(FILETYPE)
         dataset = handle.create_group("bytes_typed")
         dataset.attrs["ONDE:TYPE"] = np.array(
             [entry.encode("ascii") for entry in _ASCAN_TYPE], dtype="S32")
@@ -437,7 +450,7 @@ def write_nested_file(path):
     """
     with h5py.File(str(path), "w") as handle:
         handle.attrs["ONDE:VERSION"] = "0.9.2"
-        handle.attrs["ONDE:FILETYPE"] = ["ONDE_UT"]
+        handle.attrs["ONDE:FILETYPE"] = sorted(FILETYPE)
         dataset = handle.create_group("nested_ascan")
         dataset.attrs["ONDE:TYPE"] = _ASCAN_TYPE
         dataset.attrs["ONDE:UUID"] = "urn:uuid:99999999-9999-9999-9999-999999999996"
@@ -468,7 +481,7 @@ def write_legacy_file(path):
     """
     n_time = 500
     dt, t0 = 2e-8, 5e-6
-    onde_file = ONDEDatasetFile.new(str(path), "w",
+    onde_file = ONDEDatasetFile.new(str(path), "w", filetype=FILETYPE,
                                     onde_version=LEGACY_ONDE_VERSION)
     stamp = _stamp()
     dataset = ONDEObject.new(onde_file, "ONDE_DATASET_UT_ASCAN")

@@ -70,6 +70,22 @@ constant once the viewer has been checked against a newer set.  ``ondeview
 --list`` reports which set it read with, and asking for definitions PyONDE does
 not ship is reported as such rather than as a missing file.
 
+The file's ``ONDE:FILETYPE`` tags are reported in that same line, but nothing
+is required of them.  PyONDE lets a reader demand tags -- it raises if one is
+missing -- and the viewer deliberately demands none, because whether a file is
+worth opening depends on whether it holds a dataset that can be displayed, not
+on how it is labelled; requiring ``ONDE_UT`` would shut the viewer out of a
+conforming file from another modality.  Callers who do want the check can pass
+``filetype=`` to :func:`PyONDE.viewer.access.open_onde_file`, which forwards it
+to PyONDE only when given::
+
+  from PyONDE.viewer import access
+  onde_file = access.open_onde_file("scan.onde", filetype={"ONDE_UT"})
+
+Writing is the other way round: since PyONDE v0.1.7 the tags are mandatory when
+a file is created, which is why ``PyONDE.viewer.testdata`` passes
+``{"ONDE_DATASET", "ONDE_UT"}`` for the synthetic corpus.
+
 Using the viewer
 ----------------
 

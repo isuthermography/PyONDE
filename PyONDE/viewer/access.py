@@ -276,13 +276,21 @@ def dataset_entries(onde_file):
     return entries
 
 
-def open_onde_file(path, onde_version=None, mode="r"):
+def open_onde_file(path, onde_version=None, mode="r", filetype=None):
     """Open an ONDE file for reading.
 
     *onde_version* selects which class definitions PyONDE compiles in, not what
     the file is required to contain: a file written under a different version
     still loads, with unknown fields reachable through :func:`field` by their
     fully qualified names.  None means :data:`DEFAULT_ONDE_VERSION`.
+
+    *filetype* is an optional set of ``ONDE:FILETYPE`` tags to require of the
+    file; PyONDE raises if one of them is missing.  It defaults to None -- no
+    requirement at all -- on purpose.  The viewer browses whatever datasets a
+    file holds, so demanding ``ONDE_UT`` would lock it out of a conforming
+    file from some other modality for no gain: a file with no dataset the
+    viewer can show is already reported as such, by looking at the datasets
+    rather than at a tag.  Callers wanting the check can ask for it.
     """
     from ..onde import ONDEDatasetFile
     if onde_version is None:
@@ -294,4 +302,10 @@ def open_onde_file(path, onde_version=None, mode="r"):
         raise ValueError(
             f"no ONDE class definitions for {onde_version!r} in this PyONDE "
             f"(it ships: {', '.join(available)})")
-    return ONDEDatasetFile.new(str(path), mode, onde_version=onde_version)
+    extra = {}
+    if filetype is not None:
+        # Only passed when asked for: PyONDE gained this argument in v0.1.7,
+        # and leaving it out keeps the call working on an older install.
+        extra["filetype"] = set(filetype)
+    return ONDEDatasetFile.new(str(path), mode, onde_version=onde_version,
+                               **extra)

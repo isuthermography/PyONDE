@@ -13,7 +13,7 @@ short keys that cannot be meaningfully shortened, and hierarchical files.
 import numpy as np
 import pytest
 
-from PyONDE.viewer import access
+from PyONDE.viewer import access, testdata
 from PyONDE.viewer.model import OndeDocument
 
 
@@ -324,36 +324,36 @@ def test_the_scalar_types_pyonde_accepts(value):
         document.close()
 
 
-def _narrow_scalars_load():
-    """True when this PyONDE accepts numpy scalars beyond int and float64."""
+def _scalar_loads(value):
+    """Whether this PyONDE accepts a scalar attribute of *value*'s type."""
     try:
-        OndeDocument.open(_file_with_scalar_attribute(np.float32(1.5))).close()
+        OndeDocument.open(_file_with_scalar_attribute(value)).close()
     except ValueError:
         return False
     return True
 
 
-NARROW_SCALARS_LOAD = _narrow_scalars_load()
-
-
 @pytest.mark.parametrize("value,expected", [(np.float32(1.5), 1.5),
-                                            (np.bool_(True), True)])
-def test_narrow_scalar_attributes_behave_per_library_capability(value, expected,
-                                                                capsys):
-    """The remaining half of the gap, probed rather than worked around.
+                                            (np.bool_(True), True),
+                                            (np.complex128(1 + 2j), 1 + 2j),
+                                            (np.float16(1.5), 1.5),
+                                            (np.longdouble(1.5), 1.5)])
+def test_scalar_attribute_types_behave_per_library_capability(value, expected,
+                                                              capsys):
+    """The accepted set has grown release by release; this follows it either way.
 
-    a6be485 added numpy's integers to the accepted types, and numpy's float64
-    rides along because it subclasses Python's float.  float32 and bool_
-    subclass neither, so an attribute a vendor wrote in single precision still
-    raises and takes the whole file with it.  The viewer cannot route around
-    that -- the loader never returns a file to work with -- so what it owes
-    the user is a readable error, which is what this asserts until
-    pyonde-generic-scalar-attributes.patch (or an equivalent) lands.
+    a6be485 added numpy's integers, 66caad2 float32 and the booleans, c8c959e
+    the complex types; float64 rode along from the start by subclassing
+    Python's float.  What is left out -- float16 and longdouble today -- is
+    still enumerated rather than general, so each type is probed rather than
+    assumed.  The viewer cannot route around a type the loader rejects, since
+    the load never returns a file to work with; what it owes the user then is
+    a readable error rather than a traceback, which is the other half of this.
     """
     from PyONDE.bin import ondeview
 
     path = _file_with_scalar_attribute(value)
-    if NARROW_SCALARS_LOAD:
+    if _scalar_loads(value):
         with OndeDocument.open(path) as document:
             assert document.datasets[0].has_data
             assert access.field_value(
@@ -365,6 +365,65 @@ def test_narrow_scalar_attributes_behave_per_library_capability(value, expected,
             OndeDocument.open(path)
         assert ondeview.main(["--list", path]) == 1
         assert "cannot read" in capsys.readouterr().err
+
+
+# -- ONDE:FILETYPE tags ---------------------------------------------------
+
+def test_the_corpus_declares_the_tags_pyonde_now_requires(onde_files):
+    """PyONDE v0.1.7 made `filetype` mandatory when creating a file.
+
+    There is no default any more -- a writer that omits it gets "No filetype
+    given when creating a new file" -- so testdata.FILETYPE is what every
+    writer in the corpus passes, and this is what lands in the file.
+    """
+    import h5py
+
+    for name in ("ascan", "tscan", "cscan", "legacy"):
+        with h5py.File(onde_files[name], "r") as handle:
+            tags = {tag.decode() if isinstance(tag, bytes) else str(tag)
+                    for tag in handle.attrs["ONDE:FILETYPE"]}
+        assert tags == set(testdata.FILETYPE), (name, tags)
+
+
+def test_opening_for_reading_requires_no_tags(onde_files):
+    """The viewer's own call: no filetype argument at all.
+
+    A file is worth opening if it holds a dataset the viewer can show, which
+    is decided by looking at the datasets.  Requiring ONDE_UT here would lock
+    the viewer out of a conforming file from another modality for no gain.
+    """
+    with OndeDocument.open(onde_files["ascan"]) as document:
+        assert document.datasets[0].has_data
+
+
+def test_a_file_whose_tags_are_not_the_expected_ones_still_opens(onde_files):
+    """The hostile file carries ONDE_UT alone, not the pair PyONDE writes."""
+    import h5py
+
+    with h5py.File(onde_files["hostile"], "r") as handle:
+        tags = {tag.decode() if isinstance(tag, bytes) else str(tag)
+                for tag in handle.attrs["ONDE:FILETYPE"]}
+    assert tags != set(testdata.FILETYPE)
+
+    with OndeDocument.open(onde_files["hostile"]) as document:
+        assert document.datasets
+
+
+def test_asking_for_tags_is_available_and_enforced(onde_files):
+    """Callers who do want the check can have it, through access.open_onde_file.
+
+    Both halves matter: a tag the file carries is accepted, and one it does
+    not carry is refused rather than quietly ignored.
+    """
+    onde_file = access.open_onde_file(onde_files["ascan"],
+                                      filetype={"ONDE_UT"})
+    try:
+        assert access.dataset_entries(onde_file)
+    finally:
+        onde_file.close()
+
+    with pytest.raises(ValueError, match="filetype"):
+        access.open_onde_file(onde_files["ascan"], filetype={"ONDE_CT"})
 
 
 # -- the generator keeps up -----------------------------------------------
