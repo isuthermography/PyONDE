@@ -26,6 +26,7 @@ t = t0 + np.arange(nt)*dt
 value = np.cos(2*np.pi*800e3*t)
 
 of = ONDEDatasetFile.new(output_path, "w",
+                         filetype = {"ONDE_DATASET", "ONDE_UT"},
                          #class_defs_path = class_def_csv_path,
                          onde_version = "0.9.2"
                          )
