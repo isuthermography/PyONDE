@@ -554,6 +554,27 @@ class ONDEFileGraph(object):
     def __iter__(self):
         return iter(self.keys())
 
+    def __len__(self):
+        return len(self.keys())
+
+    def items(self):
+        """(key, dataset) for every entry point, as a dict does.
+
+        Without this a caller wanting both had to zip keys() against the
+        datasets positionally and hope the two orders agreed.
+        """
+        return [ (key, self[key]) for key in self.keys() ]
+
+    def shortitems(self):
+        """(shortkey, dataset) for every entry point.
+
+        shortkeys() and keys() are both derived from the same ordered item
+        list, so they correspond element by element; pairing them here means
+        a caller never has to rely on that.
+        """
+        return [ (shortkey, self[key])
+                 for (key, shortkey) in zip(self.keys(), self.shortkeys()) ]
+
     def _repr(self, indentation, onde_class=None, extra_attrs={}):
         extra_info = None
         if self.class_defs is not None:
@@ -1361,6 +1382,20 @@ class ONDEReferenceArray(ONDEBase):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
         return self.refs(obj) # __call__ method does reverse lookup to return a set of indices
 
+    def __len__(self):
+        """The length of the first axis, as for any Python sequence.
+
+        .shape is the primary way to ask how big a reference array is, and
+        is the only one that says anything useful about a multidimensional
+        one.  __len__ exists so that len(), and the code that calls it
+        because it expects an ordinary iterable, work as they would on any
+        other sequence.
+        """
+        shape = object.__getattribute__(self,"refs")._shape
+        if len(shape) < 1:
+            raise TypeError("len() of a 0-dimensional ONDEReferenceArray; use .shape")
+        return int(shape[0])
+
     def _canonical_index(self,index):
         """The canonical form of *index* for use as an edge identifier.
 
@@ -2010,7 +2045,7 @@ class ONDEObject(ONDEBase):
                 # Scalar HDF5 fixed-length string; decode as above.
                 h5_attr = h5_attr.decode("utf-8",errors="replace")
                 pass
-            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_) or isinstance(h5_attr,np.complex64) or isinstance(h5_attr,np.complex128):
+            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_) or isinstance(h5_attr,np.complex64) or isinstance(h5_attr,np.complex128) or isinstance(h5_attr,np.float16) or isinstance(h5_attr,np.longdouble) or isinstance(h5_attr,np.clongdouble):
                 attr_obj = ONDEValue.new(h5_attr)
                 _ONDE_attrs[attrname] = attr_obj
                 pass
@@ -2452,6 +2487,10 @@ class ONDEClassInstanceWrapper(object):
     def __contains__(self,name):
         return self._has_item(name)
 
+    def __len__(self):
+        """Forwarded so len() works on the handle the caller holds."""
+        return len(self._get_obj())
+
     def _get_attr_dataset_storage(self,name):
         obj = self._get_obj()
         return obj._get_attr_dataset_storage(name)
@@ -2630,12 +2669,12 @@ class ONDEClassInstanceWrapper(object):
         _obj = object.__getattribute__(self,"_obj")
 
         if _proxy is not None:
-            value = _proxy._get_data(self,name)
+            value = _proxy._get_data(name)
             
             return value
         else:
             _graph = object.__getattribute__(self,"_graph")
-            value = _obj._get_data(self,name)
+            value = _obj._get_data(name)
             return value
         pass
     
@@ -3602,7 +3641,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","__contains__","_list_attrs","_list_items","_onde_class_name"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","__contains__","__len__","_list_attrs","_list_items","_onde_class_name"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -3672,6 +3711,15 @@ class ONDEProxy(object):
     def _has_item(self, key):
         obj = self._get_obj()
         return obj._has_item(key)
+
+    def __len__(self):
+        """Forwarded so len() works on the handle the caller holds.
+
+        Implicit dunder lookup goes to the type, not through
+        __getattribute__, so a proxy has to define this itself rather than
+        inherit it from whatever it is proxying.
+        """
+        return len(self._get_obj())
 
     def __contains__(self,name):
         """Membership, asked of the proxy rather than of the object underneath.
