@@ -744,7 +744,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset","_get_obj"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -770,6 +770,20 @@ class ONDEBase(object):
         """
 
         raise ValueError("ONDEBase does not have attributes")
+
+    def _get_obj(self):
+        """Return the ONDEBase underneath, which here is this object itself.
+
+        ONDEProxy and ONDEClassInstanceWrapper define this to reach the object
+        they stand for; defining it here as well means code holding any of the
+        three can normalize without testing types.  It is not general-purpose
+        API and should almost never be needed: a proxy resolves its path
+        against the current snapshot or transaction on every call, so an
+        ONDEBase taken out of one is pinned to the snapshot it came from and
+        no longer tracks the graph.  Work through the proxy unless there is a
+        specific reason not to.
+        """
+        return self
 
     def _has_attr(self, name):
         """
@@ -803,7 +817,7 @@ class ONDEBase(object):
         """
         raise ValueError("ONDEBase does not have items")
     
-    def _list_items(self,index,value):
+    def _list_items(self):
         """List the data element indices of an ONDE object.
         """
         raise ValueError("ONDEBase does not have items")
@@ -1110,8 +1124,10 @@ class ONDEArray(ONDEBase):
             return object.__getattribute__(self, name)
         elif name == "shape":
              return object.__getattribute__(self, "value").shape
-        
-        raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
+        elif name == "dtype":
+             return object.__getattribute__(self, "value").dtype
+
+        raise ValueError("ONDEArray does not have data other than \"value\", \"shape\", and \"dtype\"")
     
     def _set_data(self, name, value):
         """
@@ -1123,7 +1139,10 @@ class ONDEArray(ONDEBase):
         if name == "value": # or name == "store_as_dataset":
             return object.__setattr__(self, name, value)
 
-        raise ValueError("ONDEArray does not have attributes other than \"value\"")
+        if name in ("shape","dtype"):
+            raise ValueError(f"ONDEArray \"{name:s}\" is derived from \"value\" and cannot be set directly")
+
+        raise ValueError("ONDEArray does not have data other than \"value\"")
     
     def _freeze(self):
         self.value.flags.writeable = False
@@ -1228,8 +1247,10 @@ class ONDEReferenceArray(ONDEBase):
 
         if name == "refs": # or name == "store_as_dataset":
             return object.__getattribute__(self, name)
+        elif name == "shape":
+            return object.__getattribute__(self, "refs")._shape
 
-        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\"")
+        raise ValueError("ONDEReferenceArray does not have data other than \"refs\" and \"shape\"")
     
     def _set_data(self, name, value):
         """
@@ -1239,7 +1260,10 @@ class ONDEReferenceArray(ONDEBase):
         if name == "refs": # or name == "store_as_dataset":
             return object.__setattr__(self, name, value)
 
-        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\"")
+        if name == "shape":
+            raise ValueError("ONDEReferenceArray \"shape\" is derived from \"refs\" and cannot be set directly")
+
+        raise ValueError("ONDEReferenceArray does not have data other than \"refs\" and \"shape\"")
 
     def _get_item(self,index):
         return self.refs[index]
@@ -1558,7 +1582,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_get_obj","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1802,6 +1826,7 @@ class ONDEObject(ONDEBase):
                            ID=f"{id(self):x}",
                            **new_extra_attrs)
 
+    @property
     def _onde_class_name(self):
         classname = "(None)"
         if "ONDE:TYPE" in self._ONDE_attrs:
@@ -1824,7 +1849,7 @@ class ONDEObject(ONDEBase):
             value = self._ONDE_attrs[attrname]
             if attrname in self._ONDE_dataset_attrs:
                 if isinstance(value,ONDEObject) or isinstance(value,ONDEValue):
-                    raise ValueError(f"Error writing ONDE object of class {self._onde_class_name()}: Attribute {attrname} is marked for dataset storage, but is an {type(value).__name__} not an ONDEArray or ONDEReferenceArray")
+                    raise ValueError(f"Error writing ONDE object of class {self._onde_class_name}: Attribute {attrname} is marked for dataset storage, but is an {type(value).__name__} not an ONDEArray or ONDEReferenceArray")
                 value._hdf5_write_dataset(onde_file,gr,gr.name,attrname,None,hierarchical_write)
                 pass
             else:
@@ -2450,6 +2475,30 @@ class ONDEClassInstanceWrapper(object):
 
     def _has_item(self,index):
         return self._has_attr_or_item("_has_item",index)
+
+    def _has_attr(self,name):
+        return self._has_attr_or_item("_has_attr",name)
+
+    def _list_attrs(self):
+        """The attribute names carried by the wrapped object.
+
+        Forwarded rather than left to the ONDEBase underneath so that asking
+        what an object contains never requires stepping out of the wrapper and
+        its proxy, which is what keeps the caller tracking the current
+        snapshot or transaction."""
+        return self._get_obj()._list_attrs()
+
+    def _list_items(self):
+        """The item keys carried by the wrapped object."""
+        return self._get_obj()._list_items()
+
+    @property
+    def _onde_class_name(self):
+        """The ONDE class name of the wrapped object."""
+        obj=self._get_obj()
+        if isinstance(obj,ONDEObject):
+            return obj._onde_class_name
+        raise  AttributeError("Not an ONDEObject")
 
     def _set_item(self,index,value):
         self._set_attr_or_item("_set_item",index,value)
@@ -3436,7 +3485,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","_list_attrs","_list_items","_onde_class_name"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -3503,7 +3552,29 @@ class ONDEProxy(object):
         obj = self._get_obj()
         return obj._has_attr(name)
 
-    
+    def _has_item(self, key):
+        obj = self._get_obj()
+        return obj._has_item(key)
+
+    def _list_attrs(self):
+        """The attribute names carried by the proxied object."""
+        obj = self._get_obj()
+        return obj._list_attrs()
+
+    def _list_items(self):
+        """The item keys carried by the proxied object."""
+        obj = self._get_obj()
+        return obj._list_items()
+
+    @property
+    def _onde_class_name(self):
+        """The ONDE class name of the proxied object."""
+        obj = self._get_obj()
+        if isinstance(obj,ONDEObject):
+            return obj._onde_class_name
+        raise  AttributeError("Not an ONDEObject")
+
+
     def _set_attr(self, name, value):
         self._set_attr_or_item_or_data('_set_attr', name, value)
         pass
