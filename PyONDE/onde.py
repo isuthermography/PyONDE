@@ -744,7 +744,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset","_get_obj"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_canonical_index","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset","_get_obj"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -1197,7 +1197,12 @@ class ONDEReferenceArray(ONDEBase):
         #store_as_dataset = False
         refs = None
         if _orig is not None:
-            refs = _orig.refs
+            # Copy the TwoWayArray rather than sharing the original's, which
+            # is frozen once the original is: a replacement built for a
+            # modification has to be writable so that graph_replace_node()
+            # can repoint its edges, and must not alias the object it
+            # replaces.  ONDEObject does the same with its TwoWayDictionary.
+            refs = TwoWayArray(byindex=_orig.refs)
             #store_as_dataset = _orig.store_as_dataset
             pass
 
@@ -1354,7 +1359,42 @@ class ONDEReferenceArray(ONDEBase):
 
     def _indices_for_object(self,obj):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
-        return self.refs(obj) # __call__ method does reverse lookup to return a set of indices 
+        return self.refs(obj) # __call__ method does reverse lookup to return a set of indices
+
+    def _canonical_index(self,index):
+        """The canonical form of *index* for use as an edge identifier.
+
+        A reference array may be multidimensional, so an entry can be
+        addressed with a bare index or with a tuple, and both are legitimate
+        for reading.  As an *edge identifier* -- an element of an ONDEPath, or
+        a member of the sets graph_replace_node() intersects -- it must have a
+        single spelling, because _list_edges() and _indices_for_object()
+        report edges as numpy multi_index tuples of non-negative integers.
+        A path carrying a bare 0, or a -1, where the reverse lookup says (0,)
+        or (3,) intersects with nothing, and a modification made through such
+        a path is then dropped silently instead of being applied or refused.
+
+        An index that does not select a single entry -- a partial index into a
+        multidimensional array, or a slice -- has no edge of its own and is
+        returned unchanged.
+        """
+        shape = object.__getattribute__(self,"refs")._shape
+        if not isinstance(index,tuple):
+            index = (index,)
+            pass
+        if len(index) != len(shape):
+            raise  ValueError(f"Incorrect number of index dimensions ({len(index):d} versus {len(shape):d})")
+        canonical = []
+        for (axis,element) in enumerate(index):
+            if not isinstance(element,(int,np.integer)):
+                raise  ValueError(f"Incorrect index type ({type(element).__name__:s} not integer or numpy integer)")
+            element = int(element)
+            if element < 0:
+                element += int(shape[axis])
+                pass
+            canonical.append(element)
+            pass
+        return tuple(canonical)
 
     def _repr_short(self, onde_class=None):
         return f"ONDEReferenceArray(shape={str(object.__getattribute__(self, 'refs')._shape):s})"
@@ -3682,6 +3722,13 @@ class ONDEProxy(object):
                 item_obj_keys = [ k for k in obj.keys() if obj._get_item(key) is item_obj ]
                 assert (len(item_obj_keys)==1)
                 key = item_obj_keys[0]
+                pass
+
+            # likewise an ONDEReferenceArray indexes flexibly -- bare index or
+            # tuple -- but an edge identifier has only one spelling; see
+            # ONDEReferenceArray._canonical_index().
+            if isinstance(obj, ONDEReferenceArray):
+                key = obj._canonical_index(key)
                 pass
 
             return self.__class__.new_from_proxy(self, key)
