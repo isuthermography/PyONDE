@@ -1,93 +1,152 @@
-"""Tests for PyONDE.viewer.access.
+"""The PyONDE behaviours the model layer reads ONDE files through.
 
-Each test here pins one PyONDE API behavior the viewer depends on.  If PyONDE
-changes such that a test fails, the access layer -- not the rest of the viewer
--- is what needs updating.
+This file used to test PyONDE.viewer.access, a layer of defensive accessors
+that stood between the model and the library.  That layer is gone: PyONDE
+answers these questions itself now, and the model calls it directly.  What is
+pinned here is therefore the library's own read API, in the shapes the viewer
+depends on -- if one of these fails, the model layer is what needs updating,
+and the viewer stops being a usable example of reading an ONDE file.
 """
 
 import numpy as np
 import pytest
 
-from PyONDE.viewer import access
+from PyONDE.onde import ONDEReferenceArray
 
 
-def test_field_accepts_short_and_full_names(ascan_model):
+# -- reading a field ------------------------------------------------------
+
+def test_field_value_takes_short_and_qualified_names(ascan_model):
     dataset = ascan_model.dataset
-    assert access.field(dataset, "DATA") is not None
-    assert access.field(dataset, "ONDE_DATASET:DATA") is not None
+    assert dataset._field_value("DATA") is not None
+    assert dataset._field_value("ONDE_DATASET:DATA") is not None
 
 
-def test_field_missing_returns_default(ascan_model):
-    dataset = ascan_model.dataset
-    # A field that is known to the class definitions but unset:
-    assert access.field(dataset, "ONDE_DATASET_UT_TSCAN:ZONE_FRAME", "fallback") \
-        == "fallback"
-    # A field belonging to a class PyONDE has never heard of:
-    assert access.field(dataset, "MYORG_ACCESSORY:WHATEVER", None) is None
+def test_field_value_unwraps_what_it_returns(ascan_model):
+    """The common case comes back as data, not as a handle to unwrap."""
+    assert isinstance(ascan_model.dataset._field_value("LABEL"), str)
+    assert isinstance(ascan_model.dataset._field_value("DATA"), np.ndarray)
 
 
-def test_field_value_unwraps(ascan_model):
-    label = access.field_value(ascan_model.dataset, "LABEL")
-    assert isinstance(label, str)
-    data = access.field_value(ascan_model.dataset, "DATA")
-    assert isinstance(data, np.ndarray)
+def test_a_field_holding_a_node_comes_back_as_a_handle(ascan_model):
+    """There is no value to take, and the caller wants to keep navigating."""
+    setup = ascan_model.dataset._field_value("SETUP")
+    assert setup._field_value("ONDE_SETUP:GEOMETRIC_SETUP") is not None
 
 
-def test_unwrap_passes_through_plain_values():
-    assert access.unwrap(None, "default") == "default"
-    assert access.unwrap("text") == "text"
-    array = np.arange(3)
-    assert access.unwrap(array) is array
+def test_an_absent_declared_field_gives_the_default(ascan_model, tscan_document):
+    """How the spec's optional fields are read, calibration included."""
+    dimension = list(ascan_model.dataset._field_value("INDEX_DIMENSIONS"))[0]
+    assert dimension._field_value("SCALE", 1.0) == pytest.approx(0.001)
+    # OPERATOR is declared for ONDE_DATASET and left out of these datasets.
+    absent = tscan_document.datasets[0].dataset
+    assert not absent._has_attr("ONDE_DATASET:OPERATOR")
+    assert absent._field_value("OPERATOR", "fallback") == "fallback"
+
+
+def test_a_field_of_a_different_class_is_a_mistake_not_an_absence(ascan_model):
+    """ZONE_FRAME belongs to a T-scan; asking an A-scan for it is an error.
+
+    This is the discrimination that makes a default safe to rely on: it is
+    offered only where the field could legitimately have been present.
+    """
+    with pytest.raises(NameError):
+        ascan_model.dataset._field_value("ONDE_DATASET_UT_TSCAN:ZONE_FRAME",
+                                         "fallback")
+
+
+def test_a_name_that_is_neither_carried_nor_declared_is_an_error(ascan_model):
+    """The distinction the viewer relies on: absence versus mistake.
+
+    A typo, or a field renamed between specification versions, must not read
+    as data that is legitimately missing.
+    """
+    with pytest.raises(NameError):
+        ascan_model.dataset._field_value("TOTAL_NONSENSE", "fallback")
+    with pytest.raises(AttributeError):
+        ascan_model.dataset.TOTAL_NONSENSE
+    assert not hasattr(ascan_model.dataset, "TOTAL_NONSENSE")
 
 
 def test_stored_arrays_are_read_only(ascan_model):
     """PyONDE freezes arrays; anything modifying data must copy first."""
-    data = access.field_value(ascan_model.dataset, "DATA")
+    data = ascan_model.dataset._field_value("DATA")
     assert not data.flags.writeable
 
 
-def test_ref_len_and_ref_list(ascan_model):
-    """ONDEReferenceArray has no usable .shape; ref_len reaches its length."""
-    dimensions = access.field(ascan_model.dataset, "INDEX_DIMENSIONS")
-    with pytest.raises(Exception):
-        _ = dimensions.shape          # the behavior ref_len exists to work around
-    assert access.ref_len(dimensions) == 4
-    entries = access.ref_list(dimensions)
+# -- reference arrays -----------------------------------------------------
+
+def test_a_reference_array_is_a_container(ascan_model):
+    """.shape is the size; len() and iteration are there for ordinary code.
+
+    This replaces a test that pinned the opposite -- that .shape raised, which
+    is why the viewer once reached into refs._shape[0] for a length.
+    """
+    dimensions = ascan_model.dataset._field_value("INDEX_DIMENSIONS")
+    assert isinstance(dimensions._get_obj(), ONDEReferenceArray)
+    assert dimensions.shape == (4,)
+    assert len(dimensions) == 4
+    entries = list(dimensions)
     assert len(entries) == 4
-    assert access.field_value(entries[0], "COORDINATE") == "U Position"
+    assert entries[0]._field_value("COORDINATE") == "U Position"
 
 
-def test_ref_len_of_none_is_zero():
-    assert access.ref_len(None) == 0
-    assert access.ref_list(None) == []
+# -- the type chain -------------------------------------------------------
 
-
-def test_type_chain_is_the_whole_inheritance_chain(ascan_model):
-    chain = access.type_chain(ascan_model.dataset)
-    assert chain == ("ONDE_DATASET", "ONDE_DATASET_UT", "ONDE_DATASET_UT_ASCAN")
-    assert access.leaf_type(ascan_model.dataset) == "ONDE_DATASET_UT_ASCAN"
+def test_the_type_chain_is_the_whole_inheritance_chain(ascan_model):
+    assert ascan_model.type_chain == ("ONDE_DATASET", "ONDE_DATASET_UT",
+                                      "ONDE_DATASET_UT_ASCAN")
+    assert ascan_model.leaf_type == "ONDE_DATASET_UT_ASCAN"
 
 
 def test_is_a_tests_membership_not_equality(ascan_model):
-    """A dataset is an ONDE_DATASET even though its leaf type is the A-scan."""
-    assert access.is_a(ascan_model.dataset, "ONDE_DATASET")
-    assert access.is_a(ascan_model.dataset, "ONDE_DATASET_UT_ASCAN")
-    assert not access.is_a(ascan_model.dataset, "ONDE_DATASET_UT_TSCAN")
+    """A dataset is an ONDE_DATASET even though its leaf type is the A-scan.
+
+    _onde_class_name answers with the base of the chain, which is why the
+    viewer reads ONDE:TYPE itself rather than using it for dispatch.
+    """
+    assert ascan_model.is_a("ONDE_DATASET")
+    assert ascan_model.is_a("ONDE_DATASET_UT_ASCAN")
+    assert not ascan_model.is_a("ONDE_DATASET_UT_TSCAN")
+    assert ascan_model.dataset._onde_class_name == "ONDE_DATASET"
 
 
-def test_dataset_entries_align_keys_with_short_keys(ascan_document):
-    entries = access.dataset_entries(ascan_document.onde_file)
-    assert len(entries) == 1
-    full_key, short_key, dataset = entries[0]
+# -- enumerating what an object holds -------------------------------------
+
+def test_list_attrs_reports_qualified_names(ascan_model):
+    names = ascan_model.dataset._list_attrs()
+    assert "ONDE_DATASET:DATA" in names
+    assert "ONDE:UUID" in names
+
+
+def test_membership_agrees_with_what_is_there(ascan_model):
+    dataset = ascan_model.dataset
+    assert "ONDE_DATASET:DATA" in dataset
+    assert "DATA" in dataset
+    assert "TOTAL_NONSENSE" not in dataset
+
+
+# -- the graph ------------------------------------------------------------
+
+def test_the_graph_pairs_its_keys_with_its_datasets(ascan_document):
+    """items() and shortkeys() are what the document is built from."""
+    graph = ascan_document.onde_file.graph
+    assert len(graph) == 1
+    items = graph.items()
+    shortkeys = graph.shortkeys()
+    assert len(items) == len(shortkeys) == 1
+
+    (full_key, dataset) = items[0]
+    short_key = shortkeys[0]
     assert full_key.startswith("urn:uuid:")      # the ONDE v0.9.2 UUID form
     # A short key is a unique leading piece of the UUID with its scheme prefix
     # removed -- "urn:uuid:" since ONDE v0.9.2, "2.25." before it -- so rather
     # than hardcoding either, check it appears in the full key.
     assert short_key in full_key
-    assert access.type_chain(dataset)
+    assert dataset._field_value("ONDE:TYPE") is not None
 
-
-def test_field_names_lists_populated_fields(ascan_model):
-    names = access.field_names(ascan_model.dataset)
-    assert "ONDE_DATASET:DATA" in names
-    assert "ONDE:UUID" in names
+    # shortitems() pairs them inside the library, so a caller never has to
+    # rely on the two listings being in the same order.
+    (paired_short_key, paired_dataset) = graph.shortitems()[0]
+    assert paired_short_key == short_key
+    assert paired_dataset._get_obj() is dataset._get_obj()

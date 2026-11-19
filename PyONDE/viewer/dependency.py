@@ -98,19 +98,43 @@ def _show_with_windows_api(title, text):
     import ctypes
 
     MB_OK_ICONERROR = 0x00000010
-    ctypes.windll.user32.MessageBoxW(None, text, title, MB_OK_ICONERROR)
-    return True
+    # MessageBoxW returns the id of the button pressed, or zero if the box
+    # could not be created.
+    return bool(ctypes.windll.user32.MessageBoxW(None, text, title,
+                                                 MB_OK_ICONERROR))
+
+
+def _ran_and_drew_something(argv):
+    """Run a dialog helper and say whether it actually put a box on screen.
+
+    The exit status alone cannot tell us: a helper returns non-zero both when
+    the user dismissed the box with the window manager rather than its button,
+    and when it could not reach a display at all.  The two are told apart by
+    stderr -- a toolkit that cannot open a display says so there ("cannot open
+    display", "could not connect"), while a box the user closed is silent.
+
+    Guessing wrong in the optimistic direction is the expensive one: claiming
+    a box was drawn stops the caller trying the backends after this one, so
+    the message reaches nobody.
+    """
+    import subprocess
+
+    try:
+        completed = subprocess.run(argv, check=False, capture_output=True)
+    except OSError:
+        return False
+    if completed.returncode == 0:
+        return True
+    return not completed.stderr.strip()
 
 
 def _show_with_osascript(title, text):
     import json
-    import subprocess
 
     script = (f"display dialog {json.dumps(text)} with title "
               f"{json.dumps(title)} buttons {{\"OK\"}} default button \"OK\" "
               f"with icon caution")
-    subprocess.run(["osascript", "-e", script], check=False)
-    return True
+    return _ran_and_drew_something(["osascript", "-e", script])
 
 
 def _show_with_desktop_helper(title, text):
@@ -121,7 +145,6 @@ def _show_with_desktop_helper(title, text):
     be without it while the desktop itself has a dialog helper.
     """
     import shutil
-    import subprocess
 
     candidates = (
         ("zenity", lambda program: [program, "--error", f"--title={title}",
@@ -133,8 +156,10 @@ def _show_with_desktop_helper(title, text):
         program = shutil.which(name)
         if program is None:
             continue
-        subprocess.run(build(program), check=False)
-        return True
+        if _ran_and_drew_something(build(program)):
+            return True
+        # On PATH but unable to draw -- a display it cannot reach, most
+        # likely.  Try the next helper rather than reporting success.
     return False
 
 

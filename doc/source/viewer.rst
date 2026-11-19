@@ -21,8 +21,10 @@ because the viewer is the one command likely to be started from a desktop
 launcher or a file association, where there is no terminal to read it in.  The
 box is drawn with tkinter if that is installed, otherwise with the platform's
 own dialog helper (``zenity`` or ``kdialog`` on Linux, ``osascript`` on macOS,
-``MessageBoxW`` on Windows); if none of them can draw one, the message still
-reaches standard error.  Set ``ONDEVIEW_NO_DIALOG=1`` to suppress the box
+``MessageBoxW`` on Windows).  Each is believed only if it actually drew
+something -- a helper that is installed but cannot reach a display hands on to
+the next rather than reporting success -- and if none of them can draw one,
+the message still reaches standard error.  Set ``ONDEVIEW_NO_DIALOG=1`` to suppress the box
 entirely, which is worth doing in scripts and CI, where a dialog nobody can
 dismiss would hang the run.
 
@@ -247,6 +249,21 @@ and ignores every click.
 bulk data is read.  Amplitude calibration (``value*SCALE + OFFSET``) is applied
 to the extracted slice rather than to the whole array, so browsing a large
 dataset does not cost a second copy of it.
+
+Underneath, the model reads the ONDE graph through PyONDE's own API and nothing
+else -- ``_field_value`` for a field and its default, ``_list_attrs`` for what
+an object carries, ``len()`` and iteration for a reference array,
+``graph.items()`` for the entry points -- so it doubles as a worked example of
+reading an ONDE file::
+
+  >> dataset = document[0].dataset                      # the PyONDE handle
+  >> dataset._field_value("LABEL")
+  'Synthetic A-scan raster'
+  >> dimensions = dataset._field_value("INDEX_DIMENSIONS")
+  >> len(dimensions), dimensions.shape
+  (4, (4,))
+  >> dimensions[3]._field_value("SCALE", 1.0)           # spec default if absent
+  1e-08
 
 Every axis is described by an :class:`~PyONDE.viewer.model.AxisDescriptor`
 carrying the ONDE_DIMENSION coordinate, units, scale and offset, with the

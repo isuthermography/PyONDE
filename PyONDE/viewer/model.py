@@ -29,8 +29,17 @@ import warnings
 import numpy as np
 
 from . import access
+from ..onde import ONDEArray, ONDEReferenceArray, ONDEValue
 
 __all__ = ["AxisDescriptor", "OndeDatasetModel", "OndeDocument"]
+
+#: Warning categories the document collects rather than letting them escape to
+#: stderr.  Anything else PyONDE raises is re-raised for whoever was listening.
+try:
+    from ..onde import ONDEClassDerivationWarning as _ONDEClassDerivationWarning
+    _COLLECTED_WARNINGS = (_ONDEClassDerivationWarning,)
+except ImportError:                 # pragma: no cover - older PyONDE
+    _COLLECTED_WARNINGS = ()
 
 
 #: Coordinate/units defaults for an absent index dimension (ONDE_DATASET).
@@ -80,10 +89,10 @@ class AxisDescriptor(object):
         if dimension is None:
             return cls(index, length, default_coordinate, default_units,
                        1.0, 0.0, is_default=True)
-        coordinate = access.field_value(dimension, "COORDINATE", None)
-        units = access.field_value(dimension, "UNITS", None)
-        scale = access.field_value(dimension, "SCALE", 1.0)
-        offset = access.field_value(dimension, "OFFSET", 0.0)
+        coordinate = dimension._field_value("COORDINATE", None)
+        units = dimension._field_value("UNITS", None)
+        scale = dimension._field_value("SCALE", 1.0)
+        offset = dimension._field_value("OFFSET", 0.0)
         # A COORDINATE of "None" is how the demo writer spells "unused axis".
         if isinstance(coordinate, str) and coordinate.strip().lower() == "none":
             coordinate = None
@@ -197,21 +206,32 @@ class OndeDatasetModel(object):
 
     @property
     def label(self):
-        text = access.field_value(self.dataset, "LABEL", None)
+        text = self.dataset._field_value("LABEL", None)
         if isinstance(text, bytes):
             text = text.decode("utf-8", errors="replace")
         return str(text) if text else f"(unlabeled {self.short_key})"
 
     @property
     def type_chain(self):
-        return access.type_chain(self.dataset)
+        """ONDE:TYPE as a tuple of strings, base class first.
+
+        Not _onde_class_name, which is the *base* of the chain: the viewer
+        dispatches on the most derived class, and on membership of the chain
+        rather than equality with its end, so that a future
+        ONDE_DATASET_UT_ASCAN_SOMETHING still reads as an A-scan.
+        """
+        raw = self.dataset._field_value("ONDE:TYPE", None)
+        if raw is None:
+            return ()
+        return tuple(str(entry) for entry in np.atleast_1d(raw).ravel())
 
     @property
     def leaf_type(self):
-        return access.leaf_type(self.dataset) or "ONDE_DATASET"
+        chain = self.type_chain
+        return chain[-1] if chain else "ONDE_DATASET"
 
     def is_a(self, class_name):
-        return access.is_a(self.dataset, class_name)
+        return class_name in self.type_chain
 
     # -- data -------------------------------------------------------------
 
@@ -226,7 +246,7 @@ class OndeDatasetModel(object):
         """
         if not self._array_read:
             self._array_read = True
-            value = access.field_value(self.dataset, "DATA", None)
+            value = self.dataset._field_value("DATA", None)
             if value is None:
                 self._array = None
             else:
@@ -277,7 +297,8 @@ class OndeDatasetModel(object):
         array = self.raw
         if array is None:
             return []
-        dimensions = access.ref_list(access.field(self.dataset, "INDEX_DIMENSIONS"))
+        dimensions = self.dataset._field_value("INDEX_DIMENSIONS", None)
+        dimensions = [] if dimensions is None else list(dimensions)
         if dimensions and len(dimensions) != array.ndim:
             self.warnings.append(
                 f"INDEX_DIMENSIONS lists {len(dimensions)} dimension(s) but DATA "
@@ -292,7 +313,7 @@ class OndeDatasetModel(object):
     def amplitude(self):
         """Descriptor for the stored values (AMPLITUDE_DIMENSION or defaults)."""
         if self._amplitude is None:
-            dimension = access.field(self.dataset, "AMPLITUDE_DIMENSION")
+            dimension = self.dataset._field_value("AMPLITUDE_DIMENSION", None)
             length = 0 if self.raw is None else int(self.raw.size)
             self._amplitude = AxisDescriptor.from_dimension(
                 -1, length, dimension,
@@ -369,30 +390,45 @@ def _walk(obj, depth, seen):
     if depth <= 0:
         return "<max depth reached>"
 
-    raw = access.underlying(obj)
+    # The one place the viewer looks past the handle it was given: sharing is
+    # a property of the object, not of the path taken to it, so two fields
+    # pointing at one object have to compare equal here.
+    raw = obj._get_obj()
     identity = id(raw)
     if identity in seen:
         return "<already shown above>"
 
-    reference_count = access.ref_len(obj)
-    if reference_count:
+    # Which of PyONDE's three reading modes applies is decided by the class
+    # underneath: items for a reference array, data for a value or an array,
+    # attributes for an object.
+    if isinstance(raw, ONDEReferenceArray):
         seen = seen | {identity}
-        return [_walk(entry, depth - 1, seen) for entry in access.ref_list(obj)]
+        return [_walk(entry, depth - 1, seen) for entry in obj]
 
-    value = access.unwrap(obj, None)
-    if isinstance(value, np.ndarray):
-        return _summarize_array(value)
-    if isinstance(value, (str, bytes, int, float, bool, np.number)):
-        return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+    if isinstance(raw, (ONDEValue, ONDEArray)):
+        value = obj.value
+        if isinstance(value, np.ndarray):
+            return _summarize_array(value)
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value
 
-    names = access.field_names(obj)
+    # Sorted, so the metadata window reads the same way every time rather
+    # than in whatever order the fields were written.
+    names = sorted(obj._list_attrs())
     if not names:
         return repr(obj)
 
     seen = seen | {identity}
     tree = {}
     for name in names:
-        child = access.field(obj, name, None)
+        # The field itself is wanted here rather than its value, so that the
+        # walk can recurse into it.  _get_attr rather than bracket access:
+        # bracket access never consults the class definitions, so it takes
+        # only fully qualified names and answers KeyError for everything
+        # missing, losing the distinction between a field that is absent and
+        # a name that was never a field of this class.
+        child = obj._get_attr(name)
         if child is None:
             continue
         tree[name] = _walk(child, depth - 1, seen)
@@ -402,10 +438,12 @@ def _walk(obj, depth, seen):
 class OndeDocument(object):
     """An open ONDE file and the datasets it contains."""
 
-    def __init__(self, onde_file, path, onde_version):
+    def __init__(self, onde_file, path, onde_version, load_warnings=()):
         self.onde_file = onde_file
         self.path = str(path)
         self.onde_version = onde_version
+        #: Complaints PyONDE made while reading the file, as text.
+        self.load_warnings = list(load_warnings)
         self.datasets = []
         self._by_short_key = {}
         self._load_datasets()
@@ -423,11 +461,30 @@ class OndeDocument(object):
         """
         if onde_version is None:
             onde_version = access.DEFAULT_ONDE_VERSION
-        onde_file = access.open_onde_file(path, onde_version=onde_version)
-        return cls(onde_file, path, onde_version)
+        # PyONDE reports a file whose ONDE:TYPE disagrees with the class
+        # definitions as a warning while it reads.  Collected here rather
+        # than left to stderr, so it reaches the viewer's own warning
+        # surfaces -- "ondeview --list" prints it, the metadata window shows
+        # it -- alongside the structural complaints the model raises itself.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            onde_file = access.open_onde_file(path, onde_version=onde_version)
+            pass
+        load_warnings = [str(entry.message) for entry in caught]
+        for entry in caught:
+            if not issubclass(entry.category, _COLLECTED_WARNINGS):
+                # Not ours to swallow: let it reach whoever was listening.
+                warnings.warn_explicit(entry.message, entry.category,
+                                       entry.filename, entry.lineno)
+                pass
+            pass
+        return cls(onde_file, path, onde_version, load_warnings)
 
     def _load_datasets(self):
-        for full_key, short_key, dataset in access.dataset_entries(self.onde_file):
+        # items() and shortkeys() are both derived from the graph's one
+        # ordered item list, so they correspond element by element.
+        graph = self.onde_file.graph
+        for (full_key, dataset), short_key in zip(graph.items(), graph.shortkeys()):
             model = OndeDatasetModel(self, full_key, short_key, dataset)
             self.datasets.append(model)
             self._by_short_key[short_key] = model
@@ -478,8 +535,8 @@ class OndeDocument(object):
 
     @property
     def warnings(self):
-        """Every structural complaint from every dataset, prefixed by short key."""
-        collected = []
+        """Every complaint about this file: PyONDE's at load, then each dataset's."""
+        collected = list(self.load_warnings)
         for model in self.datasets:
             model.axes            # force interpretation so warnings are populated
             for message in model.warnings:

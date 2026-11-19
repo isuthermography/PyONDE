@@ -10,7 +10,7 @@ window.
 
 ```sh
 cd /home/sdh4/code/PyONDE-viewer
-PYTHONPATH=. python -m pytest tests/test_viewer_*.py              # 221 tests
+PYTHONPATH=. python -m pytest tests/test_viewer_*.py              # 236 tests
 PYTHONPATH=. python -c "from PyONDE.viewer import testdata; print(testdata.write_all('/tmp/onde'))"
 PYTHONPATH=. python -m PyONDE.bin.ondeview --list /tmp/onde/ascan.onde
 PYTHONPATH=. python -m PyONDE.bin.ondeview /tmp/onde/ascan.onde   # the viewer
@@ -56,7 +56,7 @@ scroll wheel step the active axis, and clicking reads out the value.
 
 | File | Purpose |
 |---|---|
-| `PyONDE/viewer/access.py` | Every PyONDE API sharp edge, isolated in one place |
+| `PyONDE/viewer/access.py` | Which class definitions to open a file with |
 | `PyONDE/viewer/dependency.py` | The missing-matplotlib message, on stderr and in a box |
 | `PyONDE/viewer/model.py` | `AxisDescriptor`, `OndeDatasetModel`, `OndeDocument` |
 | `PyONDE/viewer/state.py` | `ViewState` — the whole view as immutable data |
@@ -68,7 +68,7 @@ scroll wheel step the active axis, and clicking reads out the value.
 | `PyONDE/viewer/inspector.py` | The metadata window: scrollable, filterable text |
 | `PyONDE/viewer/testdata.py` | Synthetic A/T/C-scan files + a hostile file built with raw h5py |
 | `PyONDE/bin/ondeview.py` | `ondeview` — viewer, `--list`, `--info` |
-| `tests/` | 221 tests, including a round-trip check against raw h5py |
+| `tests/` | 236 tests, including a round-trip check against raw h5py |
 | `doc/source/viewer.rst` | Sphinx page |
 
 ## Two bugs in the v0.9.2 PyONDE update — both now fixed upstream
@@ -161,8 +161,9 @@ is not.
 **Fixed-length (bytes) strings — fixed upstream in `39214f6`.** PyONDE now
 decodes them at load, so `ONDE:TYPE`, `ONDE:LABEL` and the rest arrive as `str`
 whatever the writer produced. `testdata.write_bytestype_file` builds such a file
-and the tests read it unconditionally; `access.type_chain` still decodes on its
-own, so the viewer does not depend on that.
+and the tests read it unconditionally; the viewer no longer decodes a second
+time on its own, and `test_the_type_chain_survives_bytes_in_the_file` is what
+would notice if the library stopped.
 
 One note for the record: between `50e8c49` and `39214f6` this case was worse
 than before the first fix — discovery accepted bytes while `add()` still
@@ -174,8 +175,8 @@ why `write_nested_file` does too.
 a UUID is unique — the hostile file's keys differ only in their last digit —
 there is no meaningful short form, so the key is not shortened (it just loses
 the `2.25.` every key shares). The viewer never reconstructs one key from the
-other; it zips `keys()` with `shortkeys()` positionally, so a long short key
-addresses its dataset like any other. The dataset selector leads with the
+other; it pairs `items()` with `shortkeys()` as the library hands them over, so
+a long short key addresses its dataset like any other. The dataset selector leads with the
 label and only falls back to the key's last four characters to disambiguate,
 which is what keeps a column of near-identical UUIDs readable.
 
@@ -188,6 +189,78 @@ change.
 Also worth knowing, though not a defect: a dataset group with no `ONDE:UUID`
 raises during load and takes the whole file with it, so `ondeview` can only
 report such a file, not partially display it.
+
+## The accessor layer, and why it is gone
+
+The viewer used to carry thirteen defensive accessors in `access.py` —
+`field`, `field_value`, `unwrap`, `underlying`, `ref_len`, `ref_list`,
+`field_names`, `dataset_entries` and friends — standing between `model.py` and
+PyONDE. They existed because the library could not be asked these questions
+directly, and they cost the viewer its main purpose: an example that reads an
+ONDE file through a private shim is not an example of reading an ONDE file.
+
+They are gone. `model.py` now calls PyONDE:
+
+| was | is |
+|---|---|
+| `access.field_value(ds, "DATA", None)` | `ds._field_value("DATA", None)` |
+| `access.field(ds, "INDEX_DIMENSIONS")` + `ref_list` | `ds._field_value("INDEX_DIMENSIONS")`, iterated |
+| `access.ref_len(dims)` | `len(dims)`, or `dims.shape` |
+| `access.field_names(obj)` + `underlying` | `obj._list_attrs()` |
+| `access.unwrap(obj)` | `obj.value`, where the mode is data |
+| `access.dataset_entries(file)` | `graph.items()` with `graph.shortkeys()` |
+| `access.type_chain/is_a/leaf_type` | model properties reading `ONDE:TYPE` |
+
+What is left in `access.py` is one decision and one error message: which class
+definitions to read with, and saying so clearly when they are not installed.
+That is policy, not a workaround.
+
+Two things did not move into the library, deliberately:
+
+**The type chain stays in the model.** `_onde_class_name` answers with the
+*base* of the chain (`ONDE_DATASET`), while the viewer dispatches on the most
+derived class and on membership of the chain rather than equality with its
+end — so that a future `ONDE_DATASET_UT_ASCAN_SOMETHING` still reads as an
+A-scan. Three lines over `ONDE:TYPE` say that better than a library call that
+means something else.
+
+**The metadata walk reads fields with `_get_attr`, not bracket access.** Both
+return the field rather than its value, which is what the walk needs in order
+to recurse, but bracket access never consults the class definitions, so it
+takes only fully qualified names and answers `KeyError` for everything
+missing — losing the distinction between a field that is legitimately absent
+and a name that was never a field of this class at all.
+
+Resolution used to carry a side effect too: it was what printed `Object class
+derivation mismatch` for a file whose declared ancestry disagrees with the
+loaded definitions. That belonged to *resolution* rather than to `_get_attr` —
+`_has_attr` and `_field_value` triggered it as well, while bracket access and
+`_list_attrs` were silent — and it fired once per object, so whether a user
+ever saw it depended on which call happened to touch which object first. A
+before-and-after diff of `--info` across the corpus is what caught the walk
+losing it.
+
+**It is a load-time warning now.** `ONDEFile.load()` checks every object the
+file held against the definitions in force and raises
+`ONDEClassDerivationWarning`, deduplicated per set of definitions so a file
+with five hundred probes of one class reports one problem rather than five
+hundred. Being a warning it can be silenced, promoted to an error, or
+collected — which is what `OndeDocument.open` does, folding it into
+`document.warnings` so `ondeview --list` prints it beside the model's own
+structural complaints:
+
+```
+$ ondeview --list legacy.onde
+  ONDE:VERSION 0.9.1   ONDE:FILETYPE ONDE_DATASET, ONDE_UT   read with class definitions 0.9.2
+  ...
+warning: Object class derivation mismatch for ONDE_UT_PROBE: ('ONDE_SENSOR',
+'ONDE_UT_PROBE')  from object definition versus ('ONDE_PROBE', 'ONDE_UT_PROBE')
+from class definition.
+```
+
+Any warning category the viewer does not recognise is re-raised rather than
+swallowed, so collecting this one does not silence anything else PyONDE has
+to say.
 
 ## Following the specification version
 

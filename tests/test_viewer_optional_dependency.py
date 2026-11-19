@@ -241,6 +241,61 @@ def test_the_box_can_be_switched_off(on_a_desktop, monkeypatch, capsys):
     assert "pip install matplotlib" in capsys.readouterr().err
 
 
+def _fake_helper(directory, name, exit_code, stderr=""):
+    """A stand-in dialog helper on PATH, behaving as asked."""
+    script = directory / name
+    script.write_text("#!/bin/sh\n"
+                      + (f"echo {stderr!r} >&2\n" if stderr else "")
+                      + f"exit {exit_code:d}\n")
+    script.chmod(0o755)
+    return script
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"),
+                    reason="posix shell stand-ins")
+@pytest.mark.parametrize("exit_code,stderr,drew_a_box", [
+    (0, "", True),                                   # the user pressed OK
+    (1, "", True),                                   # closed via the window manager
+    (1, "cannot open display: :99", False),          # no display to draw on
+    (127, "zenity: command not found", False),       # broken install
+])
+def test_a_desktop_helper_is_believed_only_when_it_drew_something(
+        tmp_path, monkeypatch, exit_code, stderr, drew_a_box):
+    """The bug this pins: reporting success whatever the helper did.
+
+    _show_with_desktop_helper used to run zenity and return True without
+    looking at the result, so on a machine with zenity installed but no
+    display to draw on, the caller was told a box had been shown.  That stops
+    it trying the remaining backends, and the message reaches nobody.
+
+    Exit status alone cannot separate "the user closed the box with the
+    window manager" (also non-zero) from "I could not reach a display", so
+    stderr is what distinguishes them: a toolkit that cannot open a display
+    says so, a dismissed box is silent.
+    """
+    _fake_helper(tmp_path, "zenity", exit_code, stderr)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert dependency._show_with_desktop_helper("title", "text") is drew_a_box
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"),
+                    reason="posix shell stand-ins")
+def test_a_helper_that_cannot_draw_hands_on_to_the_next(tmp_path, monkeypatch):
+    _fake_helper(tmp_path, "zenity", 1, "cannot open display: :99")
+    _fake_helper(tmp_path, "kdialog", 0)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    assert dependency._show_with_desktop_helper("title", "text") is True
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"),
+                    reason="posix shell stand-ins")
+def test_no_helper_on_path_is_not_a_failure_to_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert dependency._show_with_desktop_helper("title", "text") is False
+
+
 def test_the_real_backends_degrade_quietly(monkeypatch, capsys):
     """The one test that runs the actual dialog code rather than a stand-in.
 

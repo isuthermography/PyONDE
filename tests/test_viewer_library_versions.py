@@ -10,6 +10,8 @@ because they are properties of the library that the viewer has to live with:
 short keys that cannot be meaningfully shortened, and hierarchical files.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -75,12 +77,12 @@ def test_the_data_is_the_same_under_every_set_of_definitions(onde_files, name):
 def test_a_field_the_definitions_do_not_know_is_still_reachable(onde_files):
     """SENSOR_LIST is pre-0.9.2; under 0.9.2 it needs its fully qualified name."""
     with OndeDocument.open(onde_files["legacy"]) as document:
-        setup = access.field(document.datasets[0].dataset, "ONDE_DATASET:SETUP")
-        geometric = access.field(setup, "ONDE_SETUP:GEOMETRIC_SETUP")
-        sensors = access.field(geometric, "ONDE_GEOMETRIC_SETUP:SENSOR_LIST")
-        assert access.ref_len(sensors) == 1
-        probe = access.ref_list(sensors)[0]
-        assert access.field_value(probe, "ONDE_UT_PROBE:FREQUENCY") == \
+        setup = document.datasets[0].dataset._field_value("ONDE_DATASET:SETUP")
+        geometric = setup._field_value("ONDE_SETUP:GEOMETRIC_SETUP")
+        sensors = geometric._field_value("ONDE_GEOMETRIC_SETUP:SENSOR_LIST")
+        assert len(sensors) == 1
+        probe = list(sensors)[0]
+        assert probe._field_value("ONDE_UT_PROBE:FREQUENCY") == \
             pytest.approx(5e6)
 
 
@@ -125,14 +127,18 @@ def test_a_bytes_typed_dataset_displays(onde_files):
             app.close()
 
 
-def test_type_chain_decodes_bytes_on_its_own(onde_files):
-    """Independent of the library: the viewer would decode these regardless."""
+def test_the_type_chain_survives_bytes_in_the_file(onde_files):
+    """Decoding is PyONDE's job now; this is the file that would catch it.
 
-    class Fake(object):
-        def __getitem__(self, name):
-            return np.array([b"ONDE_DATASET", b"ONDE_DATASET_UT"], dtype="S32")
-
-    assert access.type_chain(Fake()) == ("ONDE_DATASET", "ONDE_DATASET_UT")
+    write_bytestype_file stores ONDE:TYPE as HDF5 fixed-length strings, which
+    reach a reader as bytes unless the library decodes them.  The viewer used
+    to decode a second time on its own; it relies on 39214f6 instead.
+    """
+    with OndeDocument.open(onde_files["bytestype"]) as document:
+        model = document.datasets[0]
+        assert model.type_chain == ("ONDE_DATASET", "ONDE_DATASET_UT",
+                                    "ONDE_DATASET_UT_ASCAN")
+        assert all(isinstance(entry, str) for entry in model.type_chain)
 
 
 # -- UUIDs and short keys -------------------------------------------------
@@ -309,10 +315,10 @@ def test_an_integer_scalar_attribute_reads_back(tscan_document):
     """
     model = [dataset for dataset in tscan_document.datasets
              if dataset.leaf_type.endswith("TSCAN")][0]
-    setup = access.field(model.dataset,
-                         "ONDE_DATASET_UT_TSCAN:RECONSTRUCTION_SETUP")
-    assert access.field_value(
-        setup, "ONDE_UT_RECONSTRUCTION_SETUP:REFERENCE_PROBE_INDEX") == 0
+    setup = model.dataset._field_value(
+        "ONDE_DATASET_UT_TSCAN:RECONSTRUCTION_SETUP")
+    assert setup._field_value(
+        "ONDE_UT_RECONSTRUCTION_SETUP:REFERENCE_PROBE_INDEX") == 0
 
 
 @pytest.mark.parametrize("value", [np.int64(2), np.int32(2), np.float64(1.5)])
@@ -356,8 +362,7 @@ def test_scalar_attribute_types_behave_per_library_capability(value, expected,
     if _scalar_loads(value):
         with OndeDocument.open(path) as document:
             assert document.datasets[0].has_data
-            assert access.field_value(
-                document.datasets[0].dataset,
+            assert document.datasets[0].dataset._field_value(
                 "ONDE_DATASET_UT_ASCAN:PROBE_INDEX") == expected
         assert ondeview.main(["--list", path]) == 0
     else:
@@ -418,12 +423,80 @@ def test_asking_for_tags_is_available_and_enforced(onde_files):
     onde_file = access.open_onde_file(onde_files["ascan"],
                                       filetype={"ONDE_UT"})
     try:
-        assert access.dataset_entries(onde_file)
+        assert len(onde_file.graph) == 1
     finally:
         onde_file.close()
 
     with pytest.raises(ValueError, match="filetype"):
         access.open_onde_file(onde_files["ascan"], filetype={"ONDE_CT"})
+
+
+# -- a file written against other definitions ------------------------------
+
+def test_a_derivation_mismatch_is_reported_when_the_file_is_read(onde_files):
+    """The legacy file says ONDE_SENSOR -> ONDE_UT_PROBE; 0.9.2 says ONDE_PROBE.
+
+    This used to be a print to stderr from inside name resolution, so whether
+    it appeared at all depended on which fields a caller happened to ask for,
+    and on which object it asked first.  It is a warning raised while the file
+    is read, which can be silenced, promoted to an error, or collected.
+    """
+    from PyONDE.onde import ONDEClassDerivationWarning
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        onde_file = access.open_onde_file(onde_files["legacy"])
+        onde_file.close()
+    mismatches = [entry for entry in caught
+                  if issubclass(entry.category, ONDEClassDerivationWarning)]
+    assert len(mismatches) == 1
+    message = str(mismatches[0].message)
+    assert "ONDE_UT_PROBE" in message
+    assert "ONDE_SENSOR" in message
+
+
+@pytest.mark.parametrize("name", ["ascan", "tscan", "cscan", "bytestype"])
+def test_a_conforming_file_is_read_without_complaint(onde_files, name):
+    from PyONDE.onde import ONDEClassDerivationWarning
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        onde_file = access.open_onde_file(onde_files[name])
+        onde_file.close()
+    assert not [entry for entry in caught
+                if issubclass(entry.category, ONDEClassDerivationWarning)]
+
+
+def test_the_mismatch_is_reported_once_however_often_it_is_looked_up(onde_files):
+    """One problem, not one per object and not one per field read."""
+    from PyONDE.onde import ONDEClassDerivationWarning
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        onde_file = access.open_onde_file(onde_files["legacy"])
+        try:
+            dataset = onde_file.graph.items()[0][1]
+            geometric = dataset._field_value("SETUP")._field_value(
+                "ONDE_SETUP:GEOMETRIC_SETUP")
+            probe = list(geometric._field_value(
+                "ONDE_GEOMETRIC_SETUP:SENSOR_LIST"))[0]
+            for _ in range(3):
+                probe._field_value("ONDE_UT_PROBE:FREQUENCY")
+        finally:
+            onde_file.close()
+    assert len([entry for entry in caught
+                if issubclass(entry.category, ONDEClassDerivationWarning)]) == 1
+
+
+def test_the_viewer_collects_it_rather_than_leaving_it_on_stderr(onde_files):
+    """It reaches document.warnings, so ondeview --list and the metadata
+    window show it next to the model's own structural complaints."""
+    with OndeDocument.open(onde_files["legacy"]) as document:
+        assert any("derivation mismatch" in message
+                   for message in document.warnings)
+    with OndeDocument.open(onde_files["ascan"]) as document:
+        assert not any("derivation mismatch" in message
+                       for message in document.warnings)
 
 
 # -- the generator keeps up -----------------------------------------------
