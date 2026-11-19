@@ -4,6 +4,7 @@
 import h5py
 import sys
 import os
+import warnings
 import os.path
 import posixpath
 import threading
@@ -16,6 +17,21 @@ import collections.abc
 from dataclasses import dataclass, field
 from typing import Optional, Any
 import numpy as np
+
+class ONDEClassDerivationWarning(UserWarning):
+    """An object's ONDE:TYPE disagrees with the loaded class definitions.
+
+    The file says it derives one way and the class definitions in force say
+    another, which usually means the file was written against a different
+    version of the specification.  It is raised as a warning rather than an
+    error because the object is still readable: its fields are reachable by
+    their fully qualified names whatever the definitions think of its
+    ancestry.  Being a warning, it can be silenced, turned into an error, or
+    collected with warnings.catch_warnings(record=True) by a reader that
+    wants to show it to a user.
+    """
+    pass
+
 
 enable_hierarchical = False
 # standard prefix on ONDE_DATASET:UUID
@@ -3056,12 +3072,58 @@ class ONDEClassDefinitions(object):
     
     field_cache = None #dictionary by (tuple_of_class_derivation, frozen_set_of_accessory_classes) of a dictionary by field names and field name abbreviations of ONDEField objects
     
+    _derivations_warned = None # set of ONDE:TYPE chains already reported as mismatched
+
     def __init__(self):
         self.classes = collections.OrderedDict()
         self.acc_classes = collections.OrderedDict()
         self.field_cache = {}
+        self._derivations_warned = set()
         pass
     
+    def class_derivation_problem(self, class_derivation):
+        """Where *class_derivation* disagrees with these definitions, or None.
+
+        Returns (classname, declared, defined) for the first class whose
+        ancestry as the file states it differs from the ancestry the
+        definitions give it.
+        """
+        derivation_index = 0
+        for classname in ("ONDE",) + tuple(class_derivation):
+            derivation_index += 1
+            if classname not in self.classes:
+                continue
+            declared = tuple(class_derivation[:(derivation_index-1)])
+            defined = tuple(self.classes[classname].class_derivation)
+            if declared != defined:
+                return (classname, declared, defined)
+            pass
+        return None
+
+    def warn_about_class_derivation(self, class_derivation):
+        """Report a derivation mismatch once per set of class definitions.
+
+        Deduplicated here rather than left to the warnings registry, because
+        a file with five hundred probes of the same class has one problem,
+        not five hundred.
+        """
+        problem = self.class_derivation_problem(class_derivation)
+        if problem is None:
+            return False
+        if self._derivations_warned is None:
+            self._derivations_warned = set()
+            pass
+        key = tuple(class_derivation)
+        if key in self._derivations_warned:
+            return False
+        self._derivations_warned.add(key)
+        (classname, declared, defined) = problem
+        warnings.warn(f"Object class derivation mismatch for {classname:s}: "
+                      f"{declared}  from object definition versus {defined}  "
+                      f"from class definition.",
+                      ONDEClassDerivationWarning, stacklevel=2)
+        return True
+
     def get_fields_dict(self,obj):
         """returns three dictionaries by field name of ONDEField: the shorthand dictionary, the full dictionary, the combined dictionary, and the concise set. Automatically omits any shorthands that conflict with actual attributes. The concise set includes the shortest name for each field plus any fields which don't correspond to ONDEField objects""" 
         onde_type_value = obj._ONDE_attrs["ONDE:TYPE"]
@@ -3129,7 +3191,10 @@ class ONDEClassDefinitions(object):
                 continue
 
             if class_derivation[:(derivation_index-1)] != self.classes[classname].class_derivation:
-                print(f"Object class derivation mismatch: {class_derivation[:(derivation_index-1)]}  from object definition versus {self.classes[classname].class_derivation}  from class definition.",file=sys.stderr)
+                # Reported here as well as at load time, for an object built
+                # in memory that was never loaded from a file.  Deduplicated,
+                # so a file that already reported this says nothing more.
+                self.warn_about_class_derivation(class_derivation)
                 break
                 
 
@@ -4074,6 +4139,12 @@ class ONDEFile(object):
             dataset_instances_by_h5path[group_path] = ONDEObject.load_from_hdf5(self,fileobjs_by_h5path,self.fh,dataset_h5_groups[group_path])
             pass
 
+        # Check every object the file actually held against the class
+        # definitions in force, now, while it is being read -- rather than
+        # leaving it to whichever later lookup happens to resolve a name on
+        # one of them, which is how this used to surface.
+        self._check_class_derivations(fileobjs_by_h5path)
+
         # replace existing contents of self.group as an atomic transaction
         with ONDETransaction(self.graph) as tr:
             for key in list(tr.graph.keys()):
@@ -4094,6 +4165,33 @@ class ONDEFile(object):
         pass
     
                                                             
+
+    def _check_class_derivations(self, fileobjs_by_h5path):
+        """Warn about objects whose ONDE:TYPE disagrees with the definitions.
+
+        A mismatch means the file was written against a different version of
+        the specification than the one being read with.  Nothing here stops
+        the load: the object's fields remain reachable by their fully
+        qualified names, and saying so once at load time is more use to a
+        reader than a message that may or may not appear later depending on
+        which fields it happens to ask for.
+        """
+        if self.class_defs is None:
+            return
+        for fileobj in fileobjs_by_h5path.values():
+            instance = fileobj.onde_instance
+            if not isinstance(instance,ONDEObject):
+                continue
+            if "ONDE:TYPE" not in instance:
+                continue
+            onde_type = instance._ONDE_attrs["ONDE:TYPE"]
+            if not isinstance(onde_type,ONDEArray):
+                continue
+            class_derivation = tuple([str(classname)
+                                      for classname in onde_type.value])
+            self.class_defs.warn_about_class_derivation(class_derivation)
+            pass
+        pass
 
     def flush(self):
         snap = self.graph.latest_snap
