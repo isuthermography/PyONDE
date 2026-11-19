@@ -554,6 +554,27 @@ class ONDEFileGraph(object):
     def __iter__(self):
         return iter(self.keys())
 
+    def __len__(self):
+        return len(self.keys())
+
+    def items(self):
+        """(key, dataset) for every entry point, as a dict does.
+
+        Without this a caller wanting both had to zip keys() against the
+        datasets positionally and hope the two orders agreed.
+        """
+        return [ (key, self[key]) for key in self.keys() ]
+
+    def shortitems(self):
+        """(shortkey, dataset) for every entry point.
+
+        shortkeys() and keys() are both derived from the same ordered item
+        list, so they correspond element by element; pairing them here means
+        a caller never has to rely on that.
+        """
+        return [ (shortkey, self[key])
+                 for (key, shortkey) in zip(self.keys(), self.shortkeys()) ]
+
     def _repr(self, indentation, onde_class=None, extra_attrs={}):
         extra_info = None
         if self.class_defs is not None:
@@ -744,7 +765,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_canonical_index","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset","_get_obj"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -770,6 +791,20 @@ class ONDEBase(object):
         """
 
         raise ValueError("ONDEBase does not have attributes")
+
+    def _get_obj(self):
+        """Return the ONDEBase underneath, which here is this object itself.
+
+        ONDEProxy and ONDEClassInstanceWrapper define this to reach the object
+        they stand for; defining it here as well means code holding any of the
+        three can normalize without testing types.  It is not general-purpose
+        API and should almost never be needed: a proxy resolves its path
+        against the current snapshot or transaction on every call, so an
+        ONDEBase taken out of one is pinned to the snapshot it came from and
+        no longer tracks the graph.  Work through the proxy unless there is a
+        specific reason not to.
+        """
+        return self
 
     def _has_attr(self, name):
         """
@@ -803,7 +838,7 @@ class ONDEBase(object):
         """
         raise ValueError("ONDEBase does not have items")
     
-    def _list_items(self,index,value):
+    def _list_items(self):
         """List the data element indices of an ONDE object.
         """
         raise ValueError("ONDEBase does not have items")
@@ -1110,8 +1145,10 @@ class ONDEArray(ONDEBase):
             return object.__getattribute__(self, name)
         elif name == "shape":
              return object.__getattribute__(self, "value").shape
-        
-        raise ValueError("ONDEArray does not have attributes other than \"value\" and \"store_as_dataset\"")
+        elif name == "dtype":
+             return object.__getattribute__(self, "value").dtype
+
+        raise ValueError("ONDEArray does not have data other than \"value\", \"shape\", and \"dtype\"")
     
     def _set_data(self, name, value):
         """
@@ -1123,7 +1160,10 @@ class ONDEArray(ONDEBase):
         if name == "value": # or name == "store_as_dataset":
             return object.__setattr__(self, name, value)
 
-        raise ValueError("ONDEArray does not have attributes other than \"value\"")
+        if name in ("shape","dtype"):
+            raise ValueError(f"ONDEArray \"{name:s}\" is derived from \"value\" and cannot be set directly")
+
+        raise ValueError("ONDEArray does not have data other than \"value\"")
     
     def _freeze(self):
         self.value.flags.writeable = False
@@ -1178,7 +1218,12 @@ class ONDEReferenceArray(ONDEBase):
         #store_as_dataset = False
         refs = None
         if _orig is not None:
-            refs = _orig.refs
+            # Copy the TwoWayArray rather than sharing the original's, which
+            # is frozen once the original is: a replacement built for a
+            # modification has to be writable so that graph_replace_node()
+            # can repoint its edges, and must not alias the object it
+            # replaces.  ONDEObject does the same with its TwoWayDictionary.
+            refs = TwoWayArray(byindex=_orig.refs)
             #store_as_dataset = _orig.store_as_dataset
             pass
 
@@ -1228,8 +1273,10 @@ class ONDEReferenceArray(ONDEBase):
 
         if name == "refs": # or name == "store_as_dataset":
             return object.__getattribute__(self, name)
+        elif name == "shape":
+            return object.__getattribute__(self, "refs")._shape
 
-        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\"")
+        raise ValueError("ONDEReferenceArray does not have data other than \"refs\" and \"shape\"")
     
     def _set_data(self, name, value):
         """
@@ -1239,7 +1286,10 @@ class ONDEReferenceArray(ONDEBase):
         if name == "refs": # or name == "store_as_dataset":
             return object.__setattr__(self, name, value)
 
-        raise ValueError("ONDEReferenceArray does not have attributes other than \"refs\"")
+        if name == "shape":
+            raise ValueError("ONDEReferenceArray \"shape\" is derived from \"refs\" and cannot be set directly")
+
+        raise ValueError("ONDEReferenceArray does not have data other than \"refs\" and \"shape\"")
 
     def _get_item(self,index):
         return self.refs[index]
@@ -1330,7 +1380,56 @@ class ONDEReferenceArray(ONDEBase):
 
     def _indices_for_object(self,obj):
         """identify all of the indices for self that reference object obj. Returns a frozenset."""
-        return self.refs(obj) # __call__ method does reverse lookup to return a set of indices 
+        return self.refs(obj) # __call__ method does reverse lookup to return a set of indices
+
+    def __len__(self):
+        """The length of the first axis, as for any Python sequence.
+
+        .shape is the primary way to ask how big a reference array is, and
+        is the only one that says anything useful about a multidimensional
+        one.  __len__ exists so that len(), and the code that calls it
+        because it expects an ordinary iterable, work as they would on any
+        other sequence.
+        """
+        shape = object.__getattribute__(self,"refs")._shape
+        if len(shape) < 1:
+            raise TypeError("len() of a 0-dimensional ONDEReferenceArray; use .shape")
+        return int(shape[0])
+
+    def _canonical_index(self,index):
+        """The canonical form of *index* for use as an edge identifier.
+
+        A reference array may be multidimensional, so an entry can be
+        addressed with a bare index or with a tuple, and both are legitimate
+        for reading.  As an *edge identifier* -- an element of an ONDEPath, or
+        a member of the sets graph_replace_node() intersects -- it must have a
+        single spelling, because _list_edges() and _indices_for_object()
+        report edges as numpy multi_index tuples of non-negative integers.
+        A path carrying a bare 0, or a -1, where the reverse lookup says (0,)
+        or (3,) intersects with nothing, and a modification made through such
+        a path is then dropped silently instead of being applied or refused.
+
+        An index that does not select a single entry -- a partial index into a
+        multidimensional array, or a slice -- has no edge of its own and is
+        returned unchanged.
+        """
+        shape = object.__getattribute__(self,"refs")._shape
+        if not isinstance(index,tuple):
+            index = (index,)
+            pass
+        if len(index) != len(shape):
+            raise  ValueError(f"Incorrect number of index dimensions ({len(index):d} versus {len(shape):d})")
+        canonical = []
+        for (axis,element) in enumerate(index):
+            if not isinstance(element,(int,np.integer)):
+                raise  ValueError(f"Incorrect index type ({type(element).__name__:s} not integer or numpy integer)")
+            element = int(element)
+            if element < 0:
+                element += int(shape[axis])
+                pass
+            canonical.append(element)
+            pass
+        return tuple(canonical)
 
     def _repr_short(self, onde_class=None):
         return f"ONDEReferenceArray(shape={str(object.__getattribute__(self, 'refs')._shape):s})"
@@ -1488,6 +1587,30 @@ class ONDEReferenceArray(ONDEBase):
     pass
 
 
+def _value_of_field(field, default=None):
+    """The value a field holds, for ONDEClassInstanceWrapper._field_value().
+
+    A field that holds data -- an ONDEValue or an ONDEArray -- yields that
+    data, so the caller is spared the trailing ".value" on the common case.
+    A field that holds a node of the graph, an ONDEObject or an
+    ONDEReferenceArray, yields the handle it was given, because there is no
+    value to take: the caller wants to keep navigating, and taking the
+    ONDEBase out of a proxy would pin it to the snapshot it came from.
+
+    *field* may therefore be an ONDEBase, an ONDEProxy or an
+    ONDEClassInstanceWrapper, and whichever it is comes back unchanged for
+    the graph-node case.  That is what _get_obj() is for, and close to the
+    only thing it is for.
+    """
+    obj = field._get_obj()
+    if isinstance(obj,ONDEValue) or isinstance(obj,ONDEArray):
+        value = field.value
+        if value is None:
+            return default
+        return value
+    return field
+
+
 class ONDEObject(ONDEBase):
     """ONDEObject represents a (non-leaf) node in the graph
     that can point at other objects."""
@@ -1558,7 +1681,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_get_obj","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1643,9 +1766,10 @@ class ONDEObject(ONDEBase):
         return False
     def _has_item(self,name):
         return self._has_attr(name)
-    
+
     def __contains__(self,name):
         return self._has_attr(name)
+
     
     def _set_attr(self, name, value):
         """
@@ -1802,6 +1926,7 @@ class ONDEObject(ONDEBase):
                            ID=f"{id(self):x}",
                            **new_extra_attrs)
 
+    @property
     def _onde_class_name(self):
         classname = "(None)"
         if "ONDE:TYPE" in self._ONDE_attrs:
@@ -1824,7 +1949,7 @@ class ONDEObject(ONDEBase):
             value = self._ONDE_attrs[attrname]
             if attrname in self._ONDE_dataset_attrs:
                 if isinstance(value,ONDEObject) or isinstance(value,ONDEValue):
-                    raise ValueError(f"Error writing ONDE object of class {self._onde_class_name()}: Attribute {attrname} is marked for dataset storage, but is an {type(value).__name__} not an ONDEArray or ONDEReferenceArray")
+                    raise ValueError(f"Error writing ONDE object of class {self._onde_class_name}: Attribute {attrname} is marked for dataset storage, but is an {type(value).__name__} not an ONDEArray or ONDEReferenceArray")
                 value._hdf5_write_dataset(onde_file,gr,gr.name,attrname,None,hierarchical_write)
                 pass
             else:
@@ -1920,7 +2045,7 @@ class ONDEObject(ONDEBase):
                 # Scalar HDF5 fixed-length string; decode as above.
                 h5_attr = h5_attr.decode("utf-8",errors="replace")
                 pass
-            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_) or isinstance(h5_attr,np.complex64) or isinstance(h5_attr,np.complex128):
+            if isinstance(h5_attr,str) or  isinstance(h5_attr,int) or isinstance(h5_attr,np.integer) or isinstance(h5_attr,float) or isinstance(h5_attr,np.float32) or isinstance(h5_attr,np.float64) or isinstance(h5_attr,bool) or isinstance(h5_attr,np.bool_) or isinstance(h5_attr,np.complex64) or isinstance(h5_attr,np.complex128) or isinstance(h5_attr,np.float16) or isinstance(h5_attr,np.longdouble) or isinstance(h5_attr,np.clongdouble):
                 attr_obj = ONDEValue.new(h5_attr)
                 _ONDE_attrs[attrname] = attr_obj
                 pass
@@ -2285,13 +2410,24 @@ class ONDEClassInstanceWrapper(object):
         full_name = key
         if get_method_name == "_get_attr" and isinstance(_obj,ONDEObject):
             (full_name, field) = self._full_fieldname_from_attrname(_graph, _obj, key)
-            if full_name is None:
+            declared = full_name is not None
+            if not declared:
                 full_name = key
                 pass
-            
+
             if not _obj._has_attr(full_name):
+                if not declared:
+                    # The name is neither carried by this object nor declared
+                    # for its class, so there is no field for it to be the
+                    # absence of.  Reading it as None would make a typo, or a
+                    # field renamed between specification versions, look just
+                    # like data that is legitimately not there.  Compare the
+                    # message raised when setting such a name.
+                    raise AttributeError(f"Unknown field \"{key:s}\" of ONDE class {_obj._onde_class_name:s}: not carried by this object, and not declared by the loaded class definitions. Usually this means there is a typo in the field name, or that the field is not defined in your class definitions for some reason. A field that an older file carries under a class the definitions do not know can still be read by its fully qualified name, e.g. object[\"CLASSNAME:FIELD\"]")
+                # Declared for this class but not present: a legitimate
+                # absence, which reads as None.
                 return None
-            
+
             pass
         
         if _proxy is not None:
@@ -2350,6 +2486,10 @@ class ONDEClassInstanceWrapper(object):
 
     def __contains__(self,name):
         return self._has_item(name)
+
+    def __len__(self):
+        """Forwarded so len() works on the handle the caller holds."""
+        return len(self._get_obj())
 
     def _get_attr_dataset_storage(self,name):
         obj = self._get_obj()
@@ -2451,6 +2591,71 @@ class ONDEClassInstanceWrapper(object):
     def _has_item(self,index):
         return self._has_attr_or_item("_has_item",index)
 
+    def _has_attr(self,name):
+        return self._has_attr_or_item("_has_attr",name)
+
+    def _field_value(self, name, default=None):
+        """Return the value of field *name*, or *default* if the field is absent.
+
+        Fields belong to ONDEObjects and are, in the ordinary case, declared
+        by the loaded class definitions, which is why this lives here rather
+        than further down: this is the layer that knows them.  *name* may be
+        the short form ("DATA") or the fully qualified one
+        ("ONDE_DATASET:DATA").
+
+        A field that is present gives up its value -- its data, for an
+        ONDEValue or an ONDEArray, and the field itself for an ONDEObject or
+        an ONDEReferenceArray, there being no value to take; see
+        _value_of_field().
+
+        A field that is absent yields *default* only if it is a field that
+        could have been present: one the class definitions declare for this
+        object's class.  A name they do not declare, and that the object does
+        not carry, is a mistake rather than an absence -- a typo, or a field
+        renamed between specification versions -- and raises NameError
+        instead of quietly reading as missing data.  A field carried by the
+        object but unknown to the definitions, which is what an older file
+        looks like read under newer definitions, is present and so is
+        returned.
+        """
+        obj = self._get_obj()
+        if not isinstance(obj,ONDEObject):
+            raise ValueError(f"_field_value() needs an ONDEObject, not a {type(obj).__name__:s}")
+
+        if self._has_attr(name):
+            return _value_of_field(self._get_attr(name), default)
+
+        _graph = object.__getattribute__(self,"_graph")
+        _proxy = object.__getattribute__(self,"_proxy")
+        if _proxy is not None:
+            _graph = _proxy._graph
+            pass
+        (full_name, field) = self._full_fieldname_from_attrname(_graph, obj, name)
+        if full_name is None:
+            raise NameError(f"Unknown field {name:s} of ONDE class {obj._onde_class_name:s}: not carried by this object and not declared by the loaded class definitions, so there is nothing for it to default from")
+        return default
+
+    def _list_attrs(self):
+        """The attribute names carried by the wrapped object.
+
+        Forwarded rather than left to the ONDEBase underneath so that asking
+        what an object contains never requires stepping out of the wrapper and
+        its proxy, which is what keeps the caller tracking the current
+        snapshot or transaction."""
+        return self._get_obj()._list_attrs()
+
+    def _list_items(self):
+        """The item keys carried by the wrapped object."""
+        return self._get_obj()._list_items()
+
+    @property
+    def _onde_class_name(self):
+        """The ONDE class name of the wrapped object."""
+        obj=self._get_obj()
+        if isinstance(obj,ONDEObject):
+            return obj._onde_class_name
+        raise  AttributeError("Not an ONDEObject")
+
     def _set_item(self,index,value):
         self._set_attr_or_item("_set_item",index,value)
         pass
@@ -2464,12 +2669,12 @@ class ONDEClassInstanceWrapper(object):
         _obj = object.__getattribute__(self,"_obj")
 
         if _proxy is not None:
-            value = _proxy._get_data(self,name)
+            value = _proxy._get_data(name)
             
             return value
         else:
             _graph = object.__getattribute__(self,"_graph")
-            value = _obj._get_data(self,name)
+            value = _obj._get_data(name)
             return value
         pass
     
@@ -3436,7 +3641,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","__contains__","__len__","_list_attrs","_list_items","_onde_class_name"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -3503,7 +3708,55 @@ class ONDEProxy(object):
         obj = self._get_obj()
         return obj._has_attr(name)
 
-    
+    def _has_item(self, key):
+        obj = self._get_obj()
+        return obj._has_item(key)
+
+    def __len__(self):
+        """Forwarded so len() works on the handle the caller holds.
+
+        Implicit dunder lookup goes to the type, not through
+        __getattribute__, so a proxy has to define this itself rather than
+        inherit it from whatever it is proxying.
+        """
+        return len(self._get_obj())
+
+    def __contains__(self,name):
+        """Membership, asked of the proxy rather than of the object underneath.
+
+        Without this, "name in proxy" fell back to the old iteration protocol
+        over __getitem__ and answered False for a field that is plainly there
+        -- a wrong answer rather than an error.  It is defined in terms of
+        _has_item() so that a proxy answers exactly as the wrapper around it
+        does, which for an ONDEObject (and so for an ONDEFileGraphSnapshot)
+        means testing its attributes.  Data -- an ONDEValue or an ONDEArray --
+        has no membership of its own; ask its .value instead.
+        """
+        obj = self._get_obj()
+        if not isinstance(obj,ONDEObject):
+            raise TypeError(f"membership is not defined for {type(obj).__name__:s}")
+        return self._has_item(name)
+
+
+    def _list_attrs(self):
+        """The attribute names carried by the proxied object."""
+        obj = self._get_obj()
+        return obj._list_attrs()
+
+    def _list_items(self):
+        """The item keys carried by the proxied object."""
+        obj = self._get_obj()
+        return obj._list_items()
+
+    @property
+    def _onde_class_name(self):
+        """The ONDE class name of the proxied object."""
+        obj = self._get_obj()
+        if isinstance(obj,ONDEObject):
+            return obj._onde_class_name
+        raise  AttributeError("Not an ONDEObject")
+
+
     def _set_attr(self, name, value):
         self._set_attr_or_item_or_data('_set_attr', name, value)
         pass
@@ -3544,6 +3797,13 @@ class ONDEProxy(object):
                 item_obj_keys = [ k for k in obj.keys() if obj._get_item(key) is item_obj ]
                 assert (len(item_obj_keys)==1)
                 key = item_obj_keys[0]
+                pass
+
+            # likewise an ONDEReferenceArray indexes flexibly -- bare index or
+            # tuple -- but an edge identifier has only one spelling; see
+            # ONDEReferenceArray._canonical_index().
+            if isinstance(obj, ONDEReferenceArray):
+                key = obj._canonical_index(key)
                 pass
 
             return self.__class__.new_from_proxy(self, key)
