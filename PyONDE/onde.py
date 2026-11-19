@@ -744,7 +744,7 @@ class ONDEBase(object):
 
     def __getattribute__(self,name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset","_get_obj"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_has_attr","_field_value","_set_dataset_attr","_get_data","_set_data","_get_item","_list_items","_set_item","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges", "_repr", "_repr_short","_hdf5_write_group","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_add_dataset","_get_obj"}:
                 return object.__getattribute__(self, name)
             raise IndexError(f"ONDEBase: The attribute {name:s} has a leading underscore, which is not allowed.")
         raise IndexError(f"ONDEBase: Unknown attribute {name:s}")
@@ -791,6 +791,12 @@ class ONDEBase(object):
         """
 
         return False
+
+    def _field_value(self, name, default=None):
+        """
+        Return the value of the named field, or default if it is not present.
+        """
+        raise ValueError("ONDEBase does not have attributes")
     
     def _set_attr(self, name, value):
         """
@@ -1512,6 +1518,30 @@ class ONDEReferenceArray(ONDEBase):
     pass
 
 
+def _value_of_field(field, default=None):
+    """The value a field holds, for _field_value() at any of the three layers.
+
+    A field that holds data -- an ONDEValue or an ONDEArray -- yields that
+    data, so the caller is spared the trailing ".value" on the common case.
+    A field that holds a node of the graph, an ONDEObject or an
+    ONDEReferenceArray, yields the handle it was given, because there is no
+    value to take: the caller wants to keep navigating, and taking the
+    ONDEBase out of a proxy would pin it to the snapshot it came from.
+
+    *field* may therefore be an ONDEBase, an ONDEProxy or an
+    ONDEClassInstanceWrapper, and whichever it is comes back unchanged for
+    the graph-node case.  That is what _get_obj() is for, and close to the
+    only thing it is for.
+    """
+    obj = field._get_obj()
+    if isinstance(obj,ONDEValue) or isinstance(obj,ONDEArray):
+        value = field.value
+        if value is None:
+            return default
+        return value
+    return field
+
+
 class ONDEObject(ONDEBase):
     """ONDEObject represents a (non-leaf) node in the graph
     that can point at other objects."""
@@ -1582,7 +1612,7 @@ class ONDEObject(ONDEBase):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_get_obj","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
+            if name in {"_freeze", "_frozen", "_add_referencedby", "__class__", "__dir__", "_get_attr","_get_attr_dataset_storage", "_set_attr","_set_dataset_attr","_follow_path","_modification_scopes","_indices_for_object","_assign_pathel","_list_edges","_ONDE_attrs","_ONDE_dataset_attrs", "_has_attr","_get_obj","_field_value","_repr","_repr_short","_hdf5_write_group","_list_attrs","_hdf5_write_dataset","_hdf5_write_attribute","_file_realizations","_file_realizations_lock","_onde_class_name","_get_item","_set_item","_list_items","_has_item","_del_item"}:
                 return object.__getattribute__(self, name)
             raise IndexError("ONDEObject: Attributes may not have leading underscores")
 
@@ -1667,9 +1697,28 @@ class ONDEObject(ONDEBase):
         return False
     def _has_item(self,name):
         return self._has_attr(name)
-    
+
     def __contains__(self,name):
         return self._has_attr(name)
+
+    def _field_value(self, name, default=None):
+        """Return the value of field *name*, or *default* if it is absent.
+
+        Fields are optional throughout the ONDE specification, and a reader
+        usually wants the value and a fallback rather than a handle it has to
+        test and then unwrap.  So a field holding an ONDEValue or an ONDEArray
+        gives up its data directly, while one holding an ONDEObject or an
+        ONDEReferenceArray gives back the field itself, there being no value
+        to take -- see _value_of_field().  
+
+        Names resolve exactly as they do for attribute access at this layer,
+        which here means fully qualified "CLASS:FIELD" names; an
+        ONDEClassInstanceWrapper, which knows the loaded class definitions,
+        also accepts the short form.
+        """
+        if not self._has_attr(name):
+            return default
+        return _value_of_field(self._get_attr(name), default)
     
     def _set_attr(self, name, value):
         """
@@ -2478,6 +2527,20 @@ class ONDEClassInstanceWrapper(object):
 
     def _has_attr(self,name):
         return self._has_attr_or_item("_has_attr",name)
+
+    def _field_value(self, name, default=None):
+        """Return the value of field *name*, or *default* if it is absent.
+
+        See ONDEObject._field_value().  This layer knows the loaded class
+        definitions, so *name* may be the short form ("DATA") as well as the
+        fully qualified one ("ONDE_DATASET:DATA").
+        """
+        obj = self._get_obj()
+        if not isinstance(obj,ONDEObject):
+            raise ValueError(f"_field_value() needs an object read as attributes, not a {type(obj).__name__:s}")
+        if not self._has_attr(name):
+            return default
+        return _value_of_field(self._get_attr(name), default)
 
     def _list_attrs(self):
         """The attribute names carried by the wrapped object.
@@ -3485,7 +3548,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","_list_attrs","_list_items","_onde_class_name"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","_field_value","_list_attrs","_list_items","_onde_class_name"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -3555,6 +3618,20 @@ class ONDEProxy(object):
     def _has_item(self, key):
         obj = self._get_obj()
         return obj._has_item(key)
+
+    def _field_value(self, name, default=None):
+        """Return the value of field *name*, or *default* if it is absent.
+
+        See ONDEObject._field_value().  The field comes back as a proxy when
+        it holds a node of the graph, so navigation from here keeps tracking
+        the current snapshot or transaction.
+        """
+        obj = self._get_obj()
+        if not isinstance(obj,ONDEObject):
+            raise ValueError(f"_field_value() needs an ONDEObject, not a {type(obj).__name__:s}")
+        if not self._has_attr(name):
+            return default
+        return _value_of_field(self._get_attr(name), default)
 
     def _list_attrs(self):
         """The attribute names carried by the proxied object."""
