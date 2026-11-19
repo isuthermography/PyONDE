@@ -2375,13 +2375,24 @@ class ONDEClassInstanceWrapper(object):
         full_name = key
         if get_method_name == "_get_attr" and isinstance(_obj,ONDEObject):
             (full_name, field) = self._full_fieldname_from_attrname(_graph, _obj, key)
-            if full_name is None:
+            declared = full_name is not None
+            if not declared:
                 full_name = key
                 pass
-            
+
             if not _obj._has_attr(full_name):
+                if not declared:
+                    # The name is neither carried by this object nor declared
+                    # for its class, so there is no field for it to be the
+                    # absence of.  Reading it as None would make a typo, or a
+                    # field renamed between specification versions, look just
+                    # like data that is legitimately not there.  Compare the
+                    # message raised when setting such a name.
+                    raise AttributeError(f"Unknown field \"{key:s}\" of ONDE class {_obj._onde_class_name:s}: not carried by this object, and not declared by the loaded class definitions. Usually this means there is a typo in the field name, or that the field is not defined in your class definitions for some reason. A field that an older file carries under a class the definitions do not know can still be read by its fully qualified name, e.g. object[\"CLASSNAME:FIELD\"]")
+                # Declared for this class but not present: a legitimate
+                # absence, which reads as None.
                 return None
-            
+
             pass
         
         if _proxy is not None:
@@ -3591,7 +3602,7 @@ class ONDEProxy(object):
 
     def __getattribute__(self, name):
         if name.startswith("_"):
-            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","_list_attrs","_list_items","_onde_class_name"}:
+            if name in { "_set_attr","_set_dataset_attr", "_get_attr","_get_attr_dataset_storage","_get_item","_set_item","_get_data","_set_data","_set_attr_or_item_or_data","_get_obj","_follow_path","__class__","__dict__","_graph","_repr","_repr_short","_add_dataset","__getitem__","_del_item","_has_attr","_has_item","__contains__","_list_attrs","_list_items","_onde_class_name"}:
                 return object.__getattribute__(self, name)
             elif  name in {"_freeze", "_frozen",}:
                 obj = self._get_obj()
@@ -3661,6 +3672,22 @@ class ONDEProxy(object):
     def _has_item(self, key):
         obj = self._get_obj()
         return obj._has_item(key)
+
+    def __contains__(self,name):
+        """Membership, asked of the proxy rather than of the object underneath.
+
+        Without this, "name in proxy" fell back to the old iteration protocol
+        over __getitem__ and answered False for a field that is plainly there
+        -- a wrong answer rather than an error.  It is defined in terms of
+        _has_item() so that a proxy answers exactly as the wrapper around it
+        does, which for an ONDEObject (and so for an ONDEFileGraphSnapshot)
+        means testing its attributes.  Data -- an ONDEValue or an ONDEArray --
+        has no membership of its own; ask its .value instead.
+        """
+        obj = self._get_obj()
+        if not isinstance(obj,ONDEObject):
+            raise TypeError(f"membership is not defined for {type(obj).__name__:s}")
+        return self._has_item(name)
 
 
     def _list_attrs(self):
